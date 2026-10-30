@@ -603,7 +603,7 @@ details.acc .acc-body { padding-bottom: 12px; }
   </div>
 
   <script>
-/* open-nianfo-counter — built 2026-10-30T04:22:42.459Z */
+/* open-nianfo-counter — built 2026-10-30T12:14:17.496Z */
 (function () {
   'use strict';
   var __defs = {};
@@ -722,7 +722,7 @@ details.acc .acc-body { padding-bottom: 12px; }
        * 发布新版本时这里和 package.json 要同步改（tests/version.test.js 会校验两者一致），
        * 界面上（标题栏、说明页）都会带上它，免得用户手里的 exe 究竟是哪个版本搞不清。
        */
-      const APP_VERSION = '0.2.2';
+      const APP_VERSION = '0.2.3';
 
       Object.assign(__m, { APP_VERSION });
 
@@ -1678,34 +1678,50 @@ details.acc .acc-body { padding-bottom: 12px; }
       }
 
       /**
-       * 导入备份。merge=true 时对日记录/事件做合并（同一 id 以导入的为准），
-       * merge=false 时整体覆盖。返回导入摘要。
+       * 导入备份。merge=true 时对日记录/事件做合并（同一 id 以导入的为准）；
+       * 功课除按 id 合并外，还会按名称合并——两端各自创建的同名功课视作同一门，
+       * 计数记录自动归到本机那条功课下。merge=false 时整体覆盖。返回导入摘要。
        */
       function importAll(payload, { merge = true } = {}) {
         if (!payload || payload.app !== 'open-nianfo-counter' || typeof payload.data !== 'object') {
           throw new Error('不是本应用导出的备份文件');
         }
         const incoming = payload.data;
-        const summary = { settings: 0, practices: 0, logs: 0, sessions: 0 };
+        const summary = { settings: 0, practices: 0, merged: 0, logs: 0, sessions: 0 };
+        // 导入功课 id → 本机功课 id 的映射（同名合并时生成）
+        const idRemap = new Map();
 
         if (!merge) {
           for (const k of listKeys()) if (k !== SCHEMA_KEY) localStorage.removeItem(k);
         }
 
-        // 设置：覆盖
-        if (incoming.settings) {
-          write('settings', incoming.settings);
-          summary.settings = 1;
-        }
-
-        // 功课列表：按 id 合并
+        // 功课列表：按 id 合并；同名（忽略首尾空格）并入本机同名功课，保留本机 id
         if (Array.isArray(incoming.practices)) {
-          const byId = new Map(read('practices', []).map((p) => [p.id, p]));
+          const local = read('practices', []);
+          const byId = new Map(local.map((p) => [p.id, { ...p }]));
+          const byName = new Map(local.map((p) => [String(p.name).trim(), p.id]));
           for (const p of incoming.practices) {
-            byId.set(p.id, { ...byId.get(p.id), ...p });
+            const cur = byId.get(p.id);
+            const twinId = cur ? cur.id : byName.get(String(p.name || '').trim());
+            const target = twinId ? byId.get(twinId) : null;
+            const targetId = target ? target.id : p.id;
+            byId.set(targetId, { ...(target || p), ...p, id: targetId });
+            if (p.id !== targetId) {
+              idRemap.set(p.id, targetId);
+              summary.merged++;
+            }
+            byName.set(String(p.name || '').trim(), targetId);
             summary.practices++;
           }
           write('practices', [...byId.values()]);
+        }
+
+        // 设置：覆盖（当前功课 id 若被同名合并，需改写映射后的 id）
+        if (incoming.settings) {
+          const s = { ...incoming.settings };
+          if (s.activePracticeId && idRemap.size) s.activePracticeId = idRemap.get(s.activePracticeId) || s.activePracticeId;
+          write('settings', s);
+          summary.settings = 1;
         }
 
         // 日记录：按 practiceId + date 合并（数值取较大者，避免覆盖多设备累加值）
@@ -1713,7 +1729,8 @@ details.acc .acc-body { padding-bottom: 12px; }
           const list = read('logs', []);
           const idx = new Map(list.map((l, i) => [`${l.practiceId}|${l.date}`, i]));
           for (const l of incoming.logs) {
-            const k = `${l.practiceId}|${l.date}`;
+            const pid = idRemap.get(l.practiceId) || l.practiceId;
+            const k = `${pid}|${l.date}`;
             if (idx.has(k)) {
               const cur = list[idx.get(k)];
               list[idx.get(k)] = {
@@ -1724,7 +1741,7 @@ details.acc .acc-body { padding-bottom: 12px; }
                 sessions: Math.max(cur.sessions || 0, l.sessions || 0),
               };
             } else {
-              list.push(l);
+              list.push({ ...l, practiceId: pid });
             }
             summary.logs++;
           }
@@ -1737,7 +1754,7 @@ details.acc .acc-body { padding-bottom: 12px; }
           const ids = new Set(list.map((s) => s.id));
           for (const s of incoming.sessions) {
             if (!ids.has(s.id)) {
-              list.push(s);
+              list.push({ ...s, practiceId: idRemap.get(s.practiceId) || s.practiceId });
               summary.sessions++;
             }
           }
@@ -4728,7 +4745,8 @@ details.acc .acc-body { padding-bottom: 12px; }
               if (!f) return;
               try {
                 const summary = await ctx.importFile(f);
-                toast(`已导入：${summary.logs} 条日记录、${summary.practices} 门功课`);
+                toast(`已导入：${summary.logs} 条日记录、${summary.practices} 门功课` +
+                  (summary.merged ? `（${summary.merged} 门同名功课已合并）` : ''));
                 paint();
               } catch (err) {
                 alert('导入失败：' + err.message);
