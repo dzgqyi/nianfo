@@ -1,0 +1,5135 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>开源念佛计数器 · 大白牛车替代方案</title>
+  <meta name="description" content="大白牛车蓝牙计数器 APP 停运后的开源替代：纯浏览器连接蓝牙计数器，数据只存本机，不联网、不注册、不收集。也可当普通手机计数器用。" />
+  <meta name="theme-color" content="#f6f3ec" media="(prefers-color-scheme: light)" />
+  <meta name="theme-color" content="#17150f" media="(prefers-color-scheme: dark)" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="念佛计数器" />
+  <link rel="manifest" href="./manifest.webmanifest" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%239c3b2e'/%3E%3Ctext x='32' y='45' font-size='34' text-anchor='middle' fill='%23fff' font-family='serif'%3E%E5%BF%B5%3C/text%3E%3C/svg%3E" />
+  <style>
+/* Open Nianfo Counter — 基础样式
+ * 设计原则：老年友好（大字号、大点击区、高对比）、单列纵向布局、手机优先。
+ * 配色：暖灰底 + 赭红主色（修行场景，克制不喧哗）。
+ */
+
+:root {
+  --bg: #f6f3ec;
+  --bg-card: #fffdf8;
+  --bg-sunken: #efe9dd;
+  --fg: #26221c;
+  --fg-soft: #6b6154;
+  --fg-faint: #9a8f80;
+  --accent: #9c3b2e;
+  --accent-soft: #f3e2dc;
+  --ok: #2f7a52;
+  --ok-soft: #dfeee6;
+  --warn: #a86b12;
+  --warn-soft: #f7ecd6;
+  --err: #b3261e;
+  --line: #e2d9c9;
+  --radius: 14px;
+  --radius-lg: 22px;
+  --shadow: 0 1px 2px rgba(60, 45, 20, .06), 0 8px 24px rgba(60, 45, 20, .06);
+  --font: -apple-system, BlinkMacSystemFont, "PingFang SC", "Noto Sans CJK SC",
+    "Source Han Sans SC", "Microsoft YaHei", "Segoe UI", Roboto, sans-serif;
+  --mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #17150f;
+    --bg-card: #211e17;
+    --bg-sunken: #100e0a;
+    --fg: #f0e9dc;
+    --fg-soft: #b8ac99;
+    --fg-faint: #857a6a;
+    --accent: #e08573;
+    --accent-soft: #3a2620;
+    --ok: #7fc79f;
+    --ok-soft: #1c2c23;
+    --warn: #dfb46a;
+    --warn-soft: #2e2517;
+    --err: #ef8d86;
+    --line: #332e24;
+    --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 10px 30px rgba(0, 0, 0, .35);
+  }
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font);
+  -webkit-font-smoothing: antialiased;
+  -webkit-text-size-adjust: 100%;
+}
+
+body { padding-bottom: env(safe-area-inset-bottom); }
+
+a { color: var(--accent); }
+
+h1, h2, h3 { margin: 0 0 .4em; line-height: 1.25; }
+h1 { font-size: 1.5rem; letter-spacing: .02em; }
+h2 { font-size: 1.15rem; }
+h3 { font-size: 1rem; color: var(--fg-soft); font-weight: 600; }
+p { line-height: 1.65; margin: 0 0 .8em; }
+small { color: var(--fg-soft); }
+
+/* ---------- 布局 ---------- */
+.wrap {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 14px 14px calc(84px + env(safe-area-inset-bottom));
+}
+
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  background: color-mix(in srgb, var(--bg) 88%, transparent);
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--line);
+}
+
+.topbar .brand { font-weight: 700; font-size: 1.02rem; letter-spacing: .04em; }
+.topbar .spacer { flex: 1; }
+
+.card {
+  background: var(--bg-card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  padding: 16px;
+  margin-bottom: 12px;
+  box-shadow: var(--shadow);
+}
+
+.row { display: flex; gap: 10px; align-items: center; }
+.row.wrap-row { flex-wrap: wrap; }
+.grow { flex: 1; min-width: 0; }
+.stack > * + * { margin-top: 10px; }
+
+/* ---------- 按钮 ---------- */
+button, .btn {
+  font: inherit;
+  font-weight: 600;
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+  background: var(--bg-card);
+  color: var(--fg);
+  padding: 12px 16px;
+  min-height: 48px;
+  cursor: pointer;
+  transition: transform .06s ease, background .15s ease, border-color .15s ease;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+button:active, .btn:active { transform: scale(.98); }
+button:disabled { opacity: .45; cursor: not-allowed; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button.ghost { background: transparent; }
+button.small { min-height: 38px; padding: 7px 12px; font-size: .86rem; font-weight: 500; }
+button.danger { color: var(--err); border-color: color-mix(in srgb, var(--err) 40%, var(--line)); }
+button.block { width: 100%; }
+
+/* ---------- 表单 ---------- */
+label.field { display: block; font-size: .82rem; color: var(--fg-soft); margin-bottom: 6px; letter-spacing: .02em; }
+input[type=text], input[type=number], select, textarea {
+  font: inherit;
+  width: 100%;
+  padding: 11px 12px;
+  min-height: 46px;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+textarea { min-height: 96px; font-family: var(--mono); font-size: .8rem; line-height: 1.5; }
+input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* ---------- 计数器主界面 ---------- */
+.counter-hero {
+  text-align: center;
+  padding: 22px 16px 18px;
+}
+.count-num {
+  font-size: clamp(4rem, 24vw, 7rem);
+  font-weight: 800;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -.02em;
+  margin: 4px 0 6px;
+  color: var(--fg);
+  transition: color .2s ease;
+}
+.count-num.bump { color: var(--accent); }
+.count-sub { color: var(--fg-soft); font-size: .95rem; font-variant-numeric: tabular-nums; }
+
+.progress {
+  height: 10px;
+  border-radius: 999px;
+  background: var(--bg-sunken);
+  overflow: hidden;
+  margin: 16px 0 8px;
+}
+.progress > span {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent) 60%, var(--warn)));
+  border-radius: 999px;
+  transition: width .3s ease;
+}
+
+.tapgate {
+  display: grid;
+  place-items: center;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* ---------- 状态灯 ---------- */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: .78rem;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--bg-sunken);
+  color: var(--fg-soft);
+  white-space: nowrap;
+}
+.pill.ok { background: var(--ok-soft); color: var(--ok); }
+.pill.warn { background: var(--warn-soft); color: var(--warn); }
+.pill.err { background: var(--accent-soft); color: var(--err); }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+
+/* ---------- 底部导航 ---------- */
+.tabbar {
+  position: fixed;
+  left: 0; right: 0; bottom: 0;
+  z-index: 30;
+  display: flex;
+  background: color-mix(in srgb, var(--bg-card) 94%, transparent);
+  backdrop-filter: blur(14px);
+  border-top: 1px solid var(--line);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+.tabbar button {
+  flex: 1;
+  border: 0;
+  background: transparent;
+  border-radius: 0;
+  min-height: 56px;
+  padding: 8px 4px;
+  font-size: .72rem;
+  font-weight: 600;
+  color: var(--fg-faint);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+}
+.tabbar button[aria-current=page] { color: var(--accent); }
+.tabbar .ico { font-size: 1.15rem; line-height: 1; }
+
+/* ---------- 列表 ---------- */
+.list { display: flex; flex-direction: column; gap: 8px; }
+.list-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg);
+}
+.list-item.active { border-color: var(--accent); background: var(--accent-soft); }
+.list-item .t { font-weight: 600; }
+.list-item .d { font-size: .78rem; color: var(--fg-soft); font-variant-numeric: tabular-nums; }
+
+/* ---------- 日志 ---------- */
+.log {
+  font-family: var(--mono);
+  font-size: .72rem;
+  line-height: 1.55;
+  max-height: 300px;
+  overflow: auto;
+  background: var(--bg-sunken);
+  border-radius: var(--radius);
+  padding: 10px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* ---------- 柱状图 ---------- */
+.bars { display: flex; align-items: flex-end; gap: 6px; height: 120px; padding-top: 8px; }
+.bars .col { flex: 1; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; gap: 4px; height: 100%; }
+.bars .bar { width: 100%; border-radius: 6px 6px 2px 2px; background: var(--accent); opacity: .85; min-height: 2px; }
+.bars .lab { font-size: .62rem; color: var(--fg-faint); }
+
+/* ---------- 提示条 ---------- */
+.note {
+  font-size: .82rem;
+  line-height: 1.6;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  background: var(--warn-soft);
+  color: color-mix(in srgb, var(--warn) 70%, var(--fg));
+}
+.note.info { background: var(--bg-sunken); color: var(--fg-soft); }
+
+/* ---------- 步骤列表（连接失败的「下一步」） ---------- */
+.steps {
+  margin: 0;
+  padding-left: 1.35em;
+  font-size: .84rem;
+  line-height: 1.7;
+  color: var(--fg-soft);
+}
+.steps li { margin: 2px 0; }
+.steps li::marker { color: var(--accent); font-weight: 700; }
+
+/* ---------- 键值表（环境细节） ---------- */
+.kv {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 5px 0;
+  border-bottom: 1px dashed var(--line);
+  font-size: .78rem;
+}
+.kv:last-of-type { border-bottom: 0; }
+.kv > span { color: var(--fg-soft); }
+.kv > code { font-size: .76rem; text-align: right; word-break: break-all; }
+
+/* 紧密列表：每条都值得读时不要留大空隙 */
+ul.tight { margin: 0; padding-left: 1.2em; font-size: .85rem; line-height: 1.65; }
+ul.tight li { margin: 4px 0; }
+
+/* ---------- 点按跳转（帮助里指路用） ---------- */
+.linkish {
+  border: 0;
+  background: none;
+  padding: 0;
+  color: var(--accent);
+  font: inherit;
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.kbd {
+  font-family: var(--mono);
+  font-size: .78em;
+  padding: 1px 6px;
+  border: 1px solid var(--line);
+  border-bottom-width: 2px;
+  border-radius: 6px;
+  background: var(--bg-card);
+}
+
+.hidden { display: none !important; }
+.center { text-align: center; }
+.muted { color: var(--fg-soft); }
+code { font-family: var(--mono); font-size: .86em; }
+
+
+/* 组件与弹窗补充样式（与 styles.css 一起打包） */
+
+/* ---------- 应用外壳 ---------- */
+.appbar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: calc(8px + env(safe-area-inset-top)) 14px 8px;
+  background: color-mix(in srgb, var(--bg) 90%, transparent);
+  backdrop-filter: blur(14px);
+  border-bottom: 1px solid var(--line);
+}
+.appbar .title { font-weight: 700; font-size: 1rem; }
+.appbar .title small { font-weight: 500; color: var(--fg-faint); margin-left: 6px; }
+
+.page { display: none; }
+.page.active { display: block; }
+
+/* ---------- 计数器主卡 ---------- */
+.hero-card {
+  background: var(--bg-card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow);
+  padding: 0;
+  overflow: hidden;
+  margin-bottom: 12px;
+}
+.hero-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px 0;
+}
+.hero-head .name { font-weight: 700; font-size: 1.05rem; }
+.hero-body { padding: 4px 16px 18px; text-align: center; }
+
+/* 计数按钮：整块可点，避免小按钮难按 */
+.tap-area {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 100%;
+  min-height: 260px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 10px 0 4px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: manipulation;
+  overflow: hidden;
+  isolation: isolate;
+}
+.tap-area:active { background: color-mix(in srgb, var(--bg-sunken) 55%, transparent); }
+.tap-area .ripple {
+  position: absolute;
+  z-index: 0;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 2px solid var(--accent);
+  opacity: .75;
+  pointer-events: none;
+  animation: ripple .5s ease-out forwards;
+}
+@keyframes ripple {
+  from { width: 24px; height: 24px; opacity: .7; }
+  to { width: 260px; height: 260px; opacity: 0; }
+}
+
+.count-num { margin: 0; }
+
+.meta-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin-top: 14px;
+}
+.meta-cell {
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 8px 6px;
+  text-align: center;
+}
+.meta-cell .v { font-weight: 700; font-variant-numeric: tabular-nums; font-size: 1.02rem; }
+.meta-cell .k { font-size: .68rem; color: var(--fg-faint); margin-top: 2px; letter-spacing: .06em; }
+
+.stepper { display: flex; gap: 8px; }
+.stepper button { flex: 1; }
+
+/* ---------- 设备条形 ---------- */
+.device-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  margin-bottom: 12px;
+  border-radius: var(--radius);
+  border: 1px dashed var(--line);
+  background: transparent;
+  font-size: .84rem;
+  color: var(--fg-soft);
+}
+.device-bar.ok { border-style: solid; border-color: color-mix(in srgb, var(--ok) 35%, var(--line)); background: var(--ok-soft); color: var(--ok); }
+.device-bar .grow { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---------- 弹窗 ---------- */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: rgba(20, 16, 10, .45);
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  animation: fade .16s ease;
+}
+@keyframes fade { from { opacity: 0; } to { opacity: 1; } }
+.modal-card {
+  width: min(520px, 100%);
+  max-height: 86vh;
+  overflow: auto;
+  background: var(--bg-card);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--line);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, .3);
+  padding: 20px;
+}
+.modal-card h2 { font-size: 1.1rem; margin-bottom: .5em; }
+.field-group { margin-bottom: 14px; }
+.field-group > label.field { margin-bottom: 6px; display: block; }
+.scope-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }
+.scope-list li label { display: flex; gap: 10px; align-items: center; font-size: .9rem; }
+.scope-list input[type=checkbox] { width: 20px; height: 20px; accent-color: var(--accent); }
+.modal-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 18px; }
+
+/* ---------- Toast ---------- */
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: calc(76px + env(safe-area-inset-bottom));
+  transform: translate(-50%, 12px);
+  z-index: 80;
+  background: var(--fg);
+  color: var(--bg);
+  font-size: .86rem;
+  font-weight: 500;
+  padding: 10px 16px;
+  border-radius: 999px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .18s ease, transform .18s ease;
+  max-width: 86vw;
+  text-align: center;
+}
+.toast.show { opacity: .95; transform: translate(-50%, 0); }
+
+/* ---------- 表格 ---------- */
+.tbl { width: 100%; border-collapse: collapse; font-size: .84rem; }
+.tbl th, .tbl td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--line); }
+.tbl th { color: var(--fg-faint); font-weight: 600; font-size: .74rem; letter-spacing: .04em; }
+.tbl td.num { text-align: right; font-variant-numeric: tabular-nums; }
+/* 窄屏上四列表格会挤成一团，允许横向滑动而不是压缩字 */
+.table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.table-wrap .tbl { min-width: 480px; }
+.table-wrap .tbl td:last-child { min-width: 150px; }
+
+/* ---------- 其它 ---------- */
+.chip {
+  display: inline-block;
+  font-size: .72rem;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: var(--bg-sunken);
+  color: var(--fg-soft);
+  font-family: var(--mono);
+}
+.switch-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 11px 0;
+  border-bottom: 1px solid var(--line);
+}
+.switch-row:last-child { border-bottom: 0; }
+.switch-row .lbl { font-size: .92rem; }
+.switch-row .desc { font-size: .76rem; color: var(--fg-faint); margin-top: 2px; line-height: 1.45; }
+.switch { position: relative; width: 48px; height: 28px; flex: none; }
+.switch input { opacity: 0; width: 0; height: 0; position: absolute; }
+.switch span {
+  position: absolute; inset: 0; border-radius: 999px;
+  background: var(--bg-sunken); border: 1px solid var(--line);
+  transition: background .18s ease;
+}
+.switch span::after {
+  content: ''; position: absolute; top: 3px; left: 3px;
+  width: 20px; height: 20px; border-radius: 50%;
+  background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.25);
+  transition: transform .18s ease;
+}
+.switch input:checked + span { background: var(--accent); border-color: var(--accent); }
+.switch input:checked + span::after { transform: translateX(20px); }
+
+details.acc { border: 1px solid var(--line); border-radius: var(--radius); padding: 0 12px; margin-bottom: 8px; background: var(--bg); }
+details.acc > summary { cursor: pointer; padding: 12px 0; font-weight: 600; font-size: .9rem; list-style: none; display: flex; align-items: center; gap: 8px; }
+details.acc > summary::-webkit-details-marker { display: none; }
+details.acc > summary::before { content: '▸'; color: var(--fg-faint); transition: transform .15s; }
+details.acc[open] > summary::before { transform: rotate(90deg); }
+details.acc .acc-body { padding-bottom: 12px; }
+
+.mono { font-family: var(--mono); }
+
+/* 三列按钮在窄屏会被挤成两行，缩短文案并允许自动换行 */
+.hero-actions { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.hero-actions button { padding: 10px 6px; font-size: .88rem; white-space: nowrap; }
+.right { margin-left: auto; }
+
+</style>
+</head>
+<body>
+  <header class="appbar">
+    <div class="title">念佛计数器 <small>开源版</small></div>
+    <span class="spacer"></span>
+    <span id="blePill" class="pill" title="蓝牙状态"><span class="dot"></span><span>未连接</span></span>
+  </header>
+
+  <main class="wrap" id="app"></main>
+
+  <nav class="tabbar" id="tabbar" aria-label="主导航">
+    <button data-tab="home" aria-current="page"><span class="ico">◎</span>计数</button>
+    <button data-tab="stats"><span class="ico">▤</span>统计</button>
+    <button data-tab="device"><span class="ico">◉</span>设备</button>
+    <button data-tab="settings"><span class="ico">⚙</span>设置</button>
+    <button data-tab="about"><span class="ico">?</span>说明</button>
+  </nav>
+
+  <div id="boot" class="wrap">
+    <div class="card center">
+      <p class="muted">正在加载…</p>
+    </div>
+  </div>
+
+  <script>
+/* open-nianfo-counter — built 2026-10-30T04:22:42.459Z */
+(function () {
+  'use strict';
+  var __defs = {};
+  var __cache = {};
+  function __import(id) {
+    if (__cache[id]) return __cache[id];
+    var def = __defs[id];
+    if (!def) throw new Error('模块未打包: ' + id);
+    var __m = {};
+    __cache[id] = __m;
+    def(__m);
+    return __m;
+  }
+  __defs["src/ui/dom.js"] = function (__m) {
+    (function () {
+      /**
+       * 极简 DOM 助手：够用就好，不引入框架。
+       */
+
+      function h(tag, props = {}, ...children) {
+        const el = document.createElement(tag);
+        for (const [k, v] of Object.entries(props || {})) {
+          if (k === 'class' || k === 'className') el.className = v;
+          else if (k === 'style' && typeof v === 'object') Object.assign(el.style, v);
+          else if (k === 'dataset') Object.assign(el.dataset, v);
+          else if (k.startsWith('on') && typeof v === 'function') el.addEventListener(k.slice(2).toLowerCase(), v);
+          else if (k === 'html') el.innerHTML = v;
+          else if (k === 'text') el.textContent = v;
+          else if (v === true) el.setAttribute(k, '');
+          else if (v !== false && v != null) el.setAttribute(k, v);
+        }
+        for (const c of children.flat()) {
+          if (c == null || c === false) continue;
+          el.append(c instanceof Node ? c : document.createTextNode(String(c)));
+        }
+        return el;
+      }
+
+      const $ = (sel, root = document) => root.querySelector(sel);
+      const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
+
+      function clear(el) {
+        while (el.firstChild) el.removeChild(el.firstChild);
+        return el;
+      }
+
+      function escapeHtml(s) {
+        return String(s ?? '').replace(/[&<>"']/g, (c) => ({
+          '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+        })[c]);
+      }
+
+      /** 简易 toast */
+      let toastTimer = null;
+      function toast(msg, ms = 2000) {
+        let box = document.getElementById('toast');
+        if (!box) {
+          box = h('div', { id: 'toast', class: 'toast' });
+          document.body.append(box);
+        }
+        box.textContent = msg;
+        box.classList.add('show');
+        clearTimeout(toastTimer);
+        toastTimer = setTimeout(() => box.classList.remove('show'), ms);
+      }
+
+      Object.assign(__m, { h, $, $$, clear, escapeHtml, toast });
+
+    }).call(undefined);
+  };
+
+  __defs["src/lib/bus.js"] = function (__m) {
+    (function () {
+      /**
+       * 事件总线：极简 pub/sub。模块之间只通过事件通信，避免互相 import 造成的死锁。
+       */
+      const listeners = new Map();
+
+      function on(topic, fn) {
+        if (!listeners.has(topic)) listeners.set(topic, new Set());
+        listeners.get(topic).add(fn);
+        return () => off(topic, fn);
+      }
+
+      function off(topic, fn) {
+        listeners.get(topic)?.delete(fn);
+      }
+
+      function emit(topic, payload) {
+        const set = listeners.get(topic);
+        if (!set) return;
+        for (const fn of [...set]) {
+          try {
+            fn(payload);
+          } catch (err) {
+            console.error(`[bus] listener for "${topic}" threw`, err);
+          }
+        }
+      }
+
+      /** 只读视图，供调试台（window.__onc.bus）查看当前有哪些事件被监听 */
+      const bus = { listeners, topics: () => [...listeners.keys()] };
+
+      Object.assign(__m, { on, off, emit, bus });
+
+    }).call(undefined);
+  };
+
+  __defs["src/lib/version.js"] = function (__m) {
+    (function () {
+      /**
+       * 应用版本号 —— 全项目唯一的版本来源。
+       *
+       * 为什么单独放一个文件：package.json 里的版本浏览器读不到（不能 import），
+       * 构建产物又是单文件 HTML，运行时需要一个能直接 import 的常量。
+       * 发布新版本时这里和 package.json 要同步改（tests/version.test.js 会校验两者一致），
+       * 界面上（标题栏、说明页）都会带上它，免得用户手里的 exe 究竟是哪个版本搞不清。
+       */
+      const APP_VERSION = '0.2.2';
+
+      Object.assign(__m, { APP_VERSION });
+
+    }).call(undefined);
+  };
+
+  __defs["src/lib/env.js"] = function (__m) {
+    (function () {
+      /**
+       * 环境自检：判断「这台机器 + 这个浏览器 + 这个打开方式」到底能不能连蓝牙计数器。
+       *
+       * 为什么要单独一个模块：
+       *  Web Bluetooth 的失败方式非常多，而浏览器的报错一律是
+       *  「navigator.bluetooth is undefined」或一句 NotFoundError，用户根本无从下手。
+       *  实测最常见的不是「浏览器不支持」，而是这三件事：
+       *    1. 双击 HTML 打开（file://）—— 不是安全上下文，API 直接不存在；
+       *    2. Linux 上的 Chrome —— API 存在但默认没开（要 chrome://flags）；
+       *    3. 系统没给浏览器蓝牙权限（macOS 尤其明显，Windows 11 隐私设置也会拦）。
+       *  这个模块把这些情况区分开，并给出「下一步该点哪里」。
+       *
+       * 纯函数、无副作用，方便单元测试（tests/env.test.js）。
+       */
+
+      /** 探测的上下文类型，决定后面给什么建议 */
+      const CONTEXT = {
+        /** https:// 或 http://localhost，安全上下文成立 */
+        SECURE: 'secure',
+        /** 通过 file:// 打开 */
+        FILE: 'file',
+        /** http:// 打开的一个局域网/公网地址，不是 localhost */
+        INSECURE: 'insecure',
+      };
+
+      /** 浏览器内核家族，决定是否可能支持 */
+      const BROWSER = {
+        CHROMIUM: 'chromium',
+        FIREFOX: 'firefox',
+        SAFARI: 'safari',
+        OTHER: 'other',
+      };
+
+      /** 平台家族，决定具体建议文案 */
+      const PLATFORM = {
+        WINDOWS: 'windows',
+        MACOS: 'macos',
+        LINUX: 'linux',
+        ANDROID: 'android',
+        IOS: 'ios',
+        CHROMEOS: 'chromeos',
+        UNKNOWN: 'unknown',
+      };
+
+      /* ------------------------------------------------------------------ */
+      /* 判定函数（全部接受显式入参，便于测试）                              */
+      /* ------------------------------------------------------------------ */
+
+      /**
+       * @param {Location|URL|string} loc
+       * @returns {'secure'|'file'|'insecure'}
+       */
+      function detectContext(loc) {
+        let url;
+        try {
+          url = typeof loc === 'string' ? new URL(loc) : loc;
+        } catch {
+          return CONTEXT.SECURE; // 解析失败时不误报
+        }
+        const proto = (url.protocol || '').toLowerCase();
+        if (proto === 'file:') return CONTEXT.FILE;
+        if (proto === 'https:') return CONTEXT.SECURE;
+        // http 只有 localhost / 127.0.0.1 / [::1] / *.localhost 算安全
+        const host = (url.hostname || '').toLowerCase();
+        if (host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '[::1]' || host.endsWith('.localhost')) {
+          return CONTEXT.SECURE;
+        }
+        return CONTEXT.INSECURE;
+      }
+
+      function isLocalHost(hostname) {
+        const host = String(hostname || '').toLowerCase();
+        return host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '[::1]' || host.endsWith('.localhost');
+      }
+
+      const UA_RULES = [
+        // 注意顺序：Edge/Opera/Samsung/Brave 都带 Chrome 字样，必须先判
+        { match: /\bEdg(?:A|iOS)?\//, browser: BROWSER.CHROMIUM },
+        { match: /\bOPR\/|\bOpera\//, browser: BROWSER.CHROMIUM },
+        { match: /\bSamsungBrowser\//, browser: BROWSER.CHROMIUM },
+        { match: /\bBrave\//, browser: BROWSER.CHROMIUM },
+        { match: /\bVivaldi\//, browser: BROWSER.CHROMIUM },
+        { match: /\bChrome\/|\bChromium\/|\bCriOS\//, browser: BROWSER.CHROMIUM },
+        { match: /\bFxiOS\/|\bFirefox\//, browser: BROWSER.FIREFOX },
+        { match: /\bSafari\//, browser: BROWSER.SAFARI },
+      ];
+
+      const PLATFORM_RULES = [
+        { match: /Android/i, platform: PLATFORM.ANDROID },
+        { match: /iPhone|iPad|iPod/i, platform: PLATFORM.IOS },
+        { match: /CrOS/i, platform: PLATFORM.CHROMEOS },
+        { match: /Windows NT/i, platform: PLATFORM.WINDOWS },
+        { match: /Macintosh|Mac OS X/i, platform: PLATFORM.MACOS },
+        { match: /Linux|X11/i, platform: PLATFORM.LINUX },
+      ];
+
+      function detectBrowser(ua = '') {
+        for (const r of UA_RULES) if (r.match.test(ua)) return r.browser;
+        return BROWSER.OTHER;
+      }
+
+      function detectPlatform(ua = '', maxTouchPoints = 0) {
+        // iPadOS 13+ 的 UA 伪装成 macOS 桌面版 Safari，靠触点数区分
+        if (/Macintosh/i.test(ua) && maxTouchPoints > 1) return PLATFORM.IOS;
+        for (const r of PLATFORM_RULES) if (r.match.test(ua)) return r.platform;
+        return PLATFORM.UNKNOWN;
+      }
+
+      /**
+       * 综合判断当前能否连蓝牙，返回结构化结论 + 可执行的建议。
+       *
+       * @param {object} env
+       * @param {boolean} env.hasApi      navigator.bluetooth 是否存在
+       * @param {string}  env.context     detectContext() 的结果
+       * @param {string}  env.browser     detectBrowser() 的结果
+       * @param {string}  env.platform    detectPlatform() 的结果
+       * @param {boolean} [env.isDesktop] 是否桌面端（决定措辞与推荐路径）
+       * @returns {{level:'ok'|'setup'|'blocked', code:string, title:string, detail:string, steps:string[], short?:string}}
+       */
+      function diagnose({ hasApi, context, browser, platform }) {
+        const desk = isDesktop(platform);
+
+        if (context === CONTEXT.FILE) {
+          return {
+            level: 'blocked',
+            code: 'FILE_CONTEXT',
+            title: '你是在「双击打开」这个文件',
+            detail: '直接双击 HTML 时浏览器地址栏是 file:// 开头，这种页面被浏览器视为「不安全的本地文件」，'
+              + '蓝牙、屏幕常亮、剪贴板这些能力全部被禁用——所以按钮点了没反应。计数、统计、导出都正常，只有蓝牙不行。',
+            steps: desk
+              ? [
+                '在项目目录运行：node tools/dev-server.js（或任意静态服务器）',
+                '浏览器打开 http://localhost:5173',
+                '回到本页重新点「连接」，设备选择框就会弹出来',
+              ]
+              : [
+                '把 dist/index.html 部署到任意 https 地址（GitHub Pages 免费，见 README）',
+                '用手机 Chrome 打开那个 https 网址',
+              ],
+            // 给主界面用的最短一句：一句话说清「为什么没反应 + 怎么办」
+            // 首页状态条宽度有限（手机上约 20 个汉字），所以这里刻意写短，
+            // 完整解释放在「设备」页的自检卡里。
+            short: '双击打开的本地文件，浏览器不给蓝牙。',
+          };
+        }
+
+        if (context === CONTEXT.INSECURE) {
+          return {
+            level: 'blocked',
+            code: 'INSECURE_CONTEXT',
+            title: '这个网址不是 https',
+            detail: '你现在用的是 http:// 打开的一个非 localhost 地址。浏览器只允许 https:// 或 http://localhost '
+              + '使用蓝牙，局域网 IP（如 http://192.168.1.5:5173）会被拒。',
+            steps: [
+              '本机自测：改用 http://localhost:5173（而不是 IP）',
+              '手机访问：用 GitHub Pages / Cloudflare Pages 之类的 https 托管',
+            ],
+            short: '这个网址不是 https，浏览器不授权蓝牙。',
+          };
+        }
+
+        if (browser === BROWSER.FIREFOX) {
+          return {
+            level: 'blocked',
+            code: 'FIREFOX_UNSUPPORTED',
+            title: 'Firefox 不支持 Web Bluetooth',
+            detail: 'Mozilla 出于隐私考虑明确拒绝实现这个 API，也没有开关可以打开。',
+            steps: [
+              desk ? '换用 Chrome 或 Edge 打开同一个网址（书签可以直接同步）' : '换用 Chrome 或 Edge',
+            ],
+            short: 'Firefox 无蓝牙，请用 Chrome。',
+          };
+        }
+
+        if (platform === PLATFORM.IOS) {
+          return {
+            level: 'blocked',
+            code: 'IOS_WEBKIT',
+            title: 'iPhone / iPad 上的浏览器连不了蓝牙',
+            detail: 'iOS 上所有浏览器（包括 Chrome）都被强制使用 WebKit 内核，没有 Web Bluetooth。'
+              + '这不是本项目的问题，任何网页都做不到。',
+            steps: [
+              '用一台 Android 手机或电脑（Windows / macOS），Chrome 打开同一个网址',
+              'iOS 上仍然可以当纯手机计数器用，数据可导出后合并到其他设备',
+            ],
+            short: 'iPhone/iPad 浏览器无蓝牙接口。',
+          };
+        }
+
+        if (platform === PLATFORM.LINUX) {
+          return {
+            level: 'setup',
+            code: 'LINUX_FLAG',
+            title: 'Linux 上需要手动打开一个开关',
+            detail: 'Chrome 在 Linux 上把 Web Bluetooth 放在实验特性后面，默认关闭。'
+              + '另外还需要系统蓝牙服务 BlueZ 5.41+。',
+            steps: [
+              '地址栏打开 chrome://flags/#enable-experimental-web-platform-features → 选 Enabled',
+              '重启浏览器',
+              '打开 chrome://bluetooth-internals/#adapter 确认 Adapter 一栏是绿的',
+              '回到本页重试',
+            ],
+            short: 'Linux 需在 flags 里开蓝牙支持。',
+          };
+        }
+
+        if (platform === PLATFORM.MACOS && !hasApi) {
+          return {
+            level: 'setup',
+            code: 'MACOS_PERMISSION',
+            title: '确认 Chrome 拿到了蓝牙权限',
+            detail: 'macOS 会在第一次调用时弹窗询问，如果当时点了「不允许」，之后不会再弹，'
+              + '表现就是设备列表里一个设备都没有。Safari 在 macOS 上完全不支持 Web Bluetooth。',
+            steps: [
+              '系统设置 → 隐私与安全性 → 蓝牙 → 勾选 Google Chrome',
+              '完全退出 Chrome（⌘Q）再打开',
+              '回到本页重试',
+            ],
+            short: 'Mac 请用 Chrome 并授权蓝牙。',
+          };
+        }
+
+        if (hasApi) {
+          return {
+            level: 'ok',
+            code: 'OK',
+            title: '这台机器可以连蓝牙计数器',
+            detail: desk
+              ? '桌面版 Chrome / Edge 支持 Web Bluetooth。连接期间请让这个标签页保持在前台，'
+                + '切到别的标签页会暂停页面定时器，声音和振动可能跟不上（计数本身不受影响）。'
+              : '可以正常连接。',
+            steps: [],
+            short: null,
+          };
+        }
+
+        // https + Chromium 但没有 API：多半是企业策略或系统权限
+        return {
+          level: 'setup',
+          code: 'API_MISSING',
+          title: '浏览器里没有蓝牙接口',
+          detail: '页面是 https，但 navigator.bluetooth 不存在。通常是以下三种之一：'
+            + '企业/学校下发的浏览器策略（WebBluetoothEnabled=false）、系统关闭了蓝牙、'
+            + '或者浏览器版本过旧（Chrome 需 56+，桌面 Edge 需 79+）。',
+          steps: [
+            '打开 chrome://policy 搜索 Bluetooth，看是否被策略禁用',
+            '确认系统蓝牙已打开，且这台电脑有蓝牙 4.0+ 硬件（台式机可能需要一个 USB 适配器）',
+            '升级到最新版 Chrome / Edge 后重试',
+          ],
+          short: '浏览器无蓝牙接口，检查系统设置。',
+        };
+      }
+
+      function isDesktop(platform) {
+        return platform === PLATFORM.WINDOWS || platform === PLATFORM.MACOS
+          || platform === PLATFORM.LINUX || platform === PLATFORM.CHROMEOS;
+      }
+
+      /**
+       * 在当前浏览器里跑一次自检（读真实环境）。
+       * @returns 同 diagnose()，另附 context/browser/platform/hasApi 原始值
+       */
+      function inspectEnvironment(win = typeof window !== 'undefined' ? window : null) {
+        if (!win) {
+          return {
+            hasApi: false,
+            context: CONTEXT.FILE,
+            browser: BROWSER.OTHER,
+            platform: PLATFORM.UNKNOWN,
+            ...diagnose({ hasApi: false, context: CONTEXT.FILE, browser: BROWSER.OTHER, platform: PLATFORM.UNKNOWN }),
+          };
+        }
+        const nav = win.navigator || {};
+        const hasApi = !!nav.bluetooth;
+        const context = detectContext(win.location?.href || 'https://localhost/');
+        const ua = nav.userAgent || '';
+        const browser = detectBrowser(ua);
+        const platform = detectPlatform(ua, nav.maxTouchPoints || 0);
+        return {
+          hasApi,
+          context,
+          browser,
+          platform,
+          isDesktop: isDesktop(platform),
+          userAgent: ua,
+          // 是否 Chromium 家族（决定要不要显示 chrome:// 相关提示）
+          isChromium: browser === BROWSER.CHROMIUM,
+          ...diagnose({ hasApi, context, browser, platform }),
+        };
+      }
+
+      Object.assign(__m, { CONTEXT, BROWSER, PLATFORM, detectContext, isLocalHost, detectBrowser, detectPlatform, diagnose, isDesktop, inspectEnvironment });
+
+    }).call(undefined);
+  };
+
+  __defs["src/lib/ble.js"] = function (__m) {
+    (function () {
+      /**
+       * BLE 传输层：Web Bluetooth 封装。
+       *
+       * 目标：把这台「没有文档的蓝牙计数器」变成可探测的黑盒。
+       * 浏览器只允许在用户手势里调 requestDevice，所以连接一定是用户点出来的——
+       * 这本身也是最好的隐私边界：没有后台偷偷扫设备。
+       *
+       * 兼容性：
+       *  - Chrome / Edge / Opera（Android 与桌面）支持 Web Bluetooth；
+       *  - iOS / iPadOS 上所有浏览器都跑 WebKit，不支持 Web Bluetooth，UI 会提示改用安卓或桌面。
+       */
+      const { emit } = __import("src/lib/bus.js");
+      const { inspectEnvironment, diagnose, CONTEXT, BROWSER, PLATFORM } = __import("src/lib/env.js");
+      /** 提前声明可能用到的服务，避免「未声明服务」导致拿不到特征 */
+      const OPTIONAL_SERVICES = [
+        'battery_service',
+        'device_information',
+        'generic_access',
+        // 常见厂家私服（Nordic UART / 通用透传）
+        '6e400001-b5a3-f393-e0a9-e50e24dcca9e',
+        '0000fff0-0000-1000-8000-00805f9b34fb',
+        '0000ffe0-0000-1000-8000-00805f9b34fb',
+        '0000ffe5-0000-1000-8000-00805f9b34fb',
+        '0000fef5-0000-1000-8000-00805f9b34fb',
+        // 国产 BLE 透传模块（ SYD/TI 系方案）常用的私有服务段。
+        // 大白牛车等国产计数器大概率落在这些区间，不声明就连特征都看不到。
+        '0000ae00-0000-1000-8000-00805f9b34fb',
+        '0000ae10-0000-1000-8000-00805f9b34fb',
+        '0000ffa0-0000-1000-8000-00805f9b34fb',
+        '0000fee7-0000-1000-8000-00805f9b34fb',
+        '0000fee9-0000-1000-8000-00805f9b34fb',
+        '9a660000-962d-11e2-a454-00002a5d5b51',   // 另一类国产透传（Anns/信驰达常用）
+      ];
+
+      const SUPPORTED = typeof navigator !== 'undefined' && !!navigator.bluetooth;
+
+      /**
+       * 当前环境的自检结论（含人话解释）。
+       * UI 用它来决定「显示连接按钮」还是「显示修复指引」，而不是只判断有没有 API。
+       */
+      const ENV = inspectEnvironment(typeof window !== 'undefined' ? window : null);
+
+      /**
+       * 把 navigator.bluetooth.requestDevice 抛出的错误翻译成人能看懂的话。
+       *
+       * 桌面端尤其需要这一步：Windows 上「蓝牙关掉了」和「附近没有设备」抛的是同一个
+       * NotFoundError，用户看到「找不到设备」只会以为计数器坏了。
+       */
+      function explainBleError(err, env = ENV) {
+        const name = err?.name || '';
+        const msg = String(err?.message || '');
+        const isMac = env.platform === PLATFORM.MACOS;
+        const isWin = env.platform === PLATFORM.WINDOWS;
+        const isLinux = env.platform === PLATFORM.LINUX;
+
+        if (name === 'NotFoundError') {
+          // 分不清「用户点了取消」和「真的没有设备」，两条路都写出来
+          return {
+            title: '没有选中设备',
+            detail: '可能是设备选择框里没有你的计数器，也可能是你点了取消。',
+            steps: [
+              '确认计数器已开机，并且离电脑 1 米以内；',
+              '有些计数器开机后只在 30 秒内可被发现，关掉再开一次；',
+              '如果列表是空的：' + (isWin
+                ? '检查右下角蓝牙是否开启，台式机可能需要插一个蓝牙 4.0 USB 适配器；'
+                : isMac ? '检查系统设置 → 隐私与安全性 → 蓝牙 里是否允许了 Chrome；'
+                  : isLinux ? '终端运行 bluetoothctl 确认适配器存在且已 power on；'
+                    : '确认系统蓝牙已打开；'),
+              '设备可能已被手机上的原厂 APP 占线，先关掉手机蓝牙再试。',
+            ],
+          };
+        }
+
+        if (name === 'SecurityError' || /permission|not allowed|disallowed/i.test(msg)) {
+          return {
+            title: '浏览器拒绝了蓝牙访问',
+            detail: '通常是站点权限被手动改成了「阻止」，或系统没有给浏览器蓝牙权限。',
+            steps: [
+              '点地址栏左侧的锁形/滑块图标 → 站点设置 → 蓝牙 → 改为「允许」；',
+              isMac ? '系统设置 → 隐私与安全性 → 蓝牙 → 勾选浏览器。' : '确认系统设置里浏览器有蓝牙权限。',
+            ],
+          };
+        }
+
+        if (name === 'NetworkError' || /GATT|connect/i.test(msg)) {
+          return {
+            title: '连上了但拿不到数据通道',
+            detail: '设备可能已经被别的手机/APP 连着（BLE 外设通常只允许一个中心设备），'
+              + '或者固件要求先配对。',
+            steps: [
+              '关掉手机上还开着的原厂 APP，并断开手机蓝牙；',
+              '把计数器关机再开机；',
+              '回本页重新点「连接」。',
+            ],
+          };
+        }
+
+        if (name === 'NotSupportedError') {
+          return {
+            title: '这个浏览器没有实现该蓝牙功能',
+            detail: '可能是浏览器版本过旧，或运行在不支持蓝牙的系统上。',
+            steps: ['升级到最新版 Chrome / Edge 后重试。'],
+          };
+        }
+
+        if (name === 'InvalidStateError') {
+          return {
+            title: '设备选择框还没关',
+            detail: '上一次的设备选择框仍处于打开状态，浏览器不允许同时弹两个。',
+            steps: ['切回浏览器窗口，把上次那个选择框关掉（或按 Esc），再点「连接」。'],
+          };
+        }
+
+        return {
+          title: err?.message || '蓝牙操作失败',
+          detail: '未识别的错误类型，可以看「连接日志」里的原始信息。',
+          steps: [],
+        };
+      }
+
+      function createBle({ onFrame, onLog } = {}) {
+        const state = {
+          device: null,
+          server: null,
+          notifyChar: null,
+          /** 当前挂在 notifyChar 上的监听函数，重订阅时要用它摘掉旧监听 */
+          notifyHandler: null,
+          writeChar: null,
+          services: [],
+          connected: false,
+          deviceName: '',
+          lastSeen: null,
+          /** 本次连接成功的时刻，用于判断「首帧是不是用户刚按出来的」 */
+          connectedAt: 0,
+          /** 当前通道能否主动读取；能读说明设备本就会给值，首帧可安全当基线 */
+          readable: false,
+          /** 最近一次成功订阅的通道；断线重连后要按原路重新订阅 */
+          channel: null,
+          /** 已重连次数，用于退避 */
+          retries: 0,
+          /** 是否正在自动重连 */
+          recovering: false,
+          /** 用户主动断开：此时不自动重连 */
+          manualClose: false,
+        };
+
+        const log = (level, msg, data) => {
+          onLog?.({ level, msg, data, at: Date.now() });
+          emit('ble:log', { level, msg, data });
+        };
+
+        /* ---------------- 自动重连 ----------------
+         *
+         * 为什么必须有：BLE 外设空闲一段时间会主动断开（省电），这是设备固件行为，
+         * 不是浏览器或本项目的问题。厂商 APP 也面对同一件事，只是它自己偷偷重连了，
+         * 用户毫无感知。网页版如果不重连，用户看到的就是「过一会就断」，
+         * 而且断了以后每按一下按钮都白按 —— 数据悄悄丢了，这才是最伤的地方。
+         *
+         * 策略：指数退避（1s, 2s, 4s… 最长 15s），持续尝试，直到用户手动断开。
+         * 因为 Web Bluetooth 无法在后台扫描，重连只能基于已授权的 device 对象，
+         * 所以页面关闭或刷新后就彻底断了，这是平台限制。
+         */
+        let retryTimer = 0;
+        let retryDelay = 1000;
+
+        function scheduleReconnect() {
+          if (state.manualClose) return;
+          if (state.recovering) return;
+          state.recovering = true;
+          clearTimeout(retryTimer);
+          // 首次尝试几乎立刻进行（设备刚断时往往还能连上），之后指数退避
+          const wait = state.retries === 0 ? 800 : retryDelay;
+          retryTimer = setTimeout(async () => {
+            retryTimer = 0;
+            if (state.manualClose || !state.device) { state.recovering = false; return; }
+            state.retries += 1;
+            log('info', `正在自动重连（第 ${state.retries} 次）…`);
+            try {
+              await connect({ auto: true });
+              state.retries = 0;
+              retryDelay = 1000;
+              state.recovering = false;
+              log('ok', '已自动重连，计数继续同步');
+            } catch (err) {
+              state.recovering = false;
+              retryDelay = Math.min(retryDelay * 2, 15000);
+              log('warn', `重连失败：${err?.message || err}（${(retryDelay / 1000).toFixed(0)} 秒后再试）`);
+              scheduleReconnect();
+            }
+          }, wait);
+        }
+
+        /** 停止自动重连（用户主动断开或更换设备时） */
+        function stopReconnect() {
+          clearTimeout(retryTimer);
+          retryTimer = 0;
+          state.recovering = false;
+          state.retries = 0;
+          retryDelay = 1000;
+        }
+
+        function assertSupport() {
+          if (!SUPPORTED) {
+            const err = new Error(ENV.short || '当前浏览器不支持 Web Bluetooth。');
+            err.code = ENV.code || 'UNSUPPORTED';
+            err.env = ENV;
+            throw err;
+          }
+        }
+
+        /** 打开系统选设备弹窗（必须在用户点击事件中调用） */
+        async function requestDevice({ namePrefix = '', serviceUuid = '' } = {}) {
+          assertSupport();
+          const filters = [];
+          if (serviceUuid) filters.push({ services: [normalizeUuid(serviceUuid)] });
+          if (namePrefix) filters.push({ namePrefix });
+          const options = { optionalServices: OPTIONAL_SERVICES };
+          if (filters.length) options.filters = filters;
+          else options.acceptAllDevices = true;
+
+          log('info', '正在打开蓝牙设备选择框…');
+          let device;
+          try {
+            device = await navigator.bluetooth.requestDevice(options);
+          } catch (err) {
+            log('warn', `选择设备失败：${err?.name || ''} ${err?.message || err}`);
+            err.explain = explainBleError(err, ENV);
+            throw err;
+          }
+          state.device = device;
+          state.deviceName = device.name || device.id || '(未命名设备)';
+          state.manualClose = false;
+          device.addEventListener('gattserverdisconnected', () => {
+            state.connected = false;
+            // 断线后原来的特征对象全部失效。这里必须主动摘掉监听：
+            // 部分浏览器的特征对象在重连后会被复用，残留的监听会导致
+            // 同一帧被处理多次，计数翻倍 —— 界面上完全看不出来。
+            if (state.notifyChar && state.notifyHandler) {
+              try { state.notifyChar.removeEventListener('characteristicvaluechanged', state.notifyHandler); } catch { /* 已失效 */ }
+            }
+            state.notifyChar = null;
+            state.notifyHandler = null;
+            state.writeChar = null;
+            const why = state.manualClose ? '已主动断开' : '设备断开';
+            log('warn', `${why}：${state.deviceName}`);
+            emit('ble:disconnected', { name: state.deviceName, manual: state.manualClose });
+            if (!state.manualClose) scheduleReconnect();
+          });
+          emit('ble:selected', { name: state.deviceName, id: device.id });
+          return device;
+        }
+
+        async function connect({ auto = false } = {}) {
+          if (!state.device) throw new Error('尚未选择设备');
+          if (!auto) {
+            state.manualClose = false;
+            stopReconnect();
+          }
+          log('info', auto ? `正在重新连接 ${state.deviceName}…` : `正在连接 ${state.deviceName}…`);
+          try {
+            state.server = await state.device.gatt.connect();
+          } catch (err) {
+            log('warn', `连接失败：${err?.name || ''} ${err?.message || err}`);
+            err.explain = explainBleError(err, ENV);
+            throw err;
+          }
+          state.connected = true;
+          state.connectedAt = Date.now();
+          log('ok', '已连接');
+          emit('ble:connected', { name: state.deviceName });
+
+          // 自动重连时，浏览器会丢掉所有订阅，必须按原通道重新订上，
+          // 否则「显示已连接」但一帧数据都收不到 —— 这个坑非常隐蔽。
+          if (auto && state.channel) {
+            try {
+              await subscribe(state.channel);
+              log('ok', `已恢复订阅 ${shortUuid(state.channel.characteristicUuid)}`);
+            } catch (err) {
+              log('warn', `恢复订阅失败：${err?.message || err}`);
+            }
+          }
+          return state.server;
+        }
+
+        async function disconnect() {
+          state.manualClose = true;
+          stopReconnect();
+          try {
+            if (state.device?.gatt?.connected) state.device.gatt.disconnect();
+          } catch (err) {
+            log('warn', '断开时出错：' + err.message);
+          }
+          state.connected = false;
+          state.notifyChar = null;
+          state.writeChar = null;
+        }
+
+        /** 枚举所有服务/特征，返回结构化描述（用于「设备诊断」页） */
+        async function explore() {
+          if (!state.server) throw new Error('尚未连接');
+          const services = await state.server.getPrimaryServices();
+          const out = [];
+          for (const svc of services) {
+            const chars = [];
+            try {
+              const list = await svc.getCharacteristics();
+              for (const ch of list) {
+                chars.push({
+                  uuid: ch.uuid,
+                  properties: { ...ch.properties },
+                  canNotify: !!(ch.properties.notify || ch.properties.indicate),
+                  canWrite: !!(ch.properties.write || ch.properties.writeWithoutResponse),
+                  canRead: !!ch.properties.read,
+                });
+              }
+            } catch (err) {
+              log('warn', `读取服务 ${svc.uuid} 的特征失败：${err.message}`);
+            }
+            out.push({ uuid: svc.uuid, isPrimary: svc.isPrimary, characteristics: chars });
+          }
+          state.services = out;
+          log('ok', `发现 ${out.length} 个服务，${out.reduce((n, s) => n + s.characteristics.length, 0)} 个特征`);
+          emit('ble:explored', out);
+          return out;
+        }
+
+        /** 判断哪个特征最可能是「计数器数据」：优先自定义服务的 notify 特征 */
+        function pickCandidates(services) {
+          const scored = [];
+          for (const svc of services) {
+            for (const ch of svc.characteristics) {
+              if (!ch.canNotify) continue;
+              let score = 0;
+              if (!isStandardUuid(ch.uuid)) score += 3;
+              if (svc.uuid.startsWith('6e4000')) score += 2;      // Nordic UART TX
+              if (ch.uuid.includes('2a37') || ch.uuid.includes('2a19')) score -= 5; // 心率 / 电量
+              scored.push({ service: svc.uuid, characteristic: ch.uuid, score });
+            }
+          }
+          return scored.sort((a, b) => b.score - a.score);
+        }
+
+        /** 订阅通知。成功后会记住通道，断线重连时按原路恢复 */
+        async function subscribe({ serviceUuid, characteristicUuid, silent = false }) {
+          if (!state.server) throw new Error('尚未连接');
+          const svc = await state.server.getPrimaryService(serviceUuid);
+          const ch = await svc.getCharacteristic(characteristicUuid);
+
+          // 同一特征重复订阅时，必须先摘掉旧监听。
+          // 断线重连会走这条路，而浏览器给的是「同一个」特征对象，
+          // 不摘的话监听会叠加：断 3 次重连 3 次后，一帧数据被处理 4 遍，计数直接翻几倍。
+          // 这是最隐蔽的一类 bug —— 界面上一切正常，只有数字悄悄偏大。
+          if (state.notifyChar && state.notifyHandler) {
+            try {
+              state.notifyChar.removeEventListener('characteristicvaluechanged', state.notifyHandler);
+            } catch { /* 旧特征已失效，无所谓 */ }
+            state.notifyHandler = null;
+          }
+
+          const handler = (ev) => {
+            const dv = ev.target.value;
+            const bytes = new Uint8Array(dv.buffer.slice(dv.byteOffset, dv.byteOffset + dv.byteLength));
+            state.lastSeen = Date.now();
+            onFrame?.({ bytes, characteristic: ch.uuid, at: state.lastSeen });
+          };
+          ch.addEventListener('characteristicvaluechanged', handler);
+          await ch.startNotifications();
+          state.notifyChar = ch;
+          state.notifyHandler = handler;
+          state.channel = { serviceUuid, characteristicUuid };
+          state.readable = !!(ch.properties && ch.properties.read);
+          if (!silent) log('ok', `已订阅通知 ${shortUuid(ch.uuid)}`);
+          return ch;
+        }
+
+        /**
+         * 主动读一次当前值，用来建立「基线」。
+         *
+         * 为什么重要：本项目的增量算法是「首帧只当基线，不计入」。
+         * 如果设备只在按键时才通知，那么用户按第一下时收到的那一帧会被当成基线丢掉，
+         * 于是「按了一下但数没变」 —— 看起来就像完全没生效。
+         * 连上后立刻读一次，把基线提前固定住，第一下按键就能正确 +1。
+         */
+        async function readCurrentValue() {
+          if (!state.notifyChar) return null;
+          try {
+            if (typeof state.notifyChar.readValue !== 'function') return null;
+            const dv = await state.notifyChar.readValue();
+            const bytes = new Uint8Array(dv.buffer.slice(dv.byteOffset, dv.byteOffset + dv.byteLength));
+            // 记下"这个通道可读"，probe 据此判断设备是否会自己推值，
+            // 从而决定要不要给首帧做"被吞掉一次按键"的补偿
+            state.readable = true;
+            log('info', `读取当前值：${Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join(' ')}`);
+            onFrame?.({ bytes, characteristic: state.notifyChar.uuid, at: Date.now(), fromRead: true });
+            return bytes;
+          } catch {
+            // 该特征不支持读（很常见），不是错误
+            log('info', '该通道不支持主动读取，只能等设备推送');
+            return null;
+          }
+        }
+
+        /** 找到可写特征（用于下发清零/校准指令），优先自定义服务 */
+        async function findWritable(services) {
+          const candidates = [];
+          for (const svc of services) {
+            for (const ch of svc.characteristics) {
+              if (!ch.canWrite) continue;
+              candidates.push({ svc: svc.uuid, ch: ch.uuid, custom: !isStandardUuid(ch.uuid) });
+            }
+          }
+          candidates.sort((a, b) => Number(b.custom) - Number(a.custom));
+          for (const c of candidates) {
+            try {
+              const svc = await state.server.getPrimaryService(c.svc);
+              state.writeChar = await svc.getCharacteristic(c.ch);
+              log('ok', `可写特征：${shortUuid(c.ch)}`);
+              return state.writeChar;
+            } catch { /* 试下一个 */ }
+          }
+          log('warn', '未找到可写特征，清零指令将无法下发');
+          return null;
+        }
+
+        async function write(bytes) {
+          if (!state.writeChar) throw new Error('没有可写特征，无法下发指令');
+          const arr = new Uint8Array(bytes);
+          if (typeof state.writeChar.writeValueWithoutResponse === 'function') {
+            await state.writeChar.writeValueWithoutResponse(arr);
+          } else {
+            await state.writeChar.writeValue(arr);
+          }
+          log('info', '已下发：' + Array.from(arr, (b) => b.toString(16).padStart(2, '0')).join(' '));
+        }
+
+        async function readBattery() {
+          try {
+            const svc = await state.server.getPrimaryService('battery_service');
+            const ch = await svc.getCharacteristic('battery_level');
+            const v = await ch.readValue();
+            return v.getUint8(0);
+          } catch {
+            return null;
+          }
+        }
+
+        /** 尝试读 Device Information，用来识别固件版本（诊断用） */
+        async function readDeviceInfo() {
+          const out = {};
+          const map = {
+            '2a29': 'manufacturer',
+            '2a24': 'model',
+            '2a26': 'firmware',
+            '2a27': 'hardware',
+            '2a28': 'software',
+            '2a25': 'serial',
+          };
+          try {
+            const svc = await state.server.getPrimaryService('device_information');
+            for (const [id, key] of Object.entries(map)) {
+              try {
+                const ch = await svc.getCharacteristic(id);
+                const v = await ch.readValue();
+                out[key] = new TextDecoder().decode(v);
+              } catch { /* 该字段不存在 */ }
+            }
+          } catch {
+            return out;
+          }
+          return out;
+        }
+
+        /**
+         * 自动寻找计数通道。
+         *
+         * 背景：自动订阅是按「最像计数通道」的启发式打分挑一个，但各家设备命名五花八门，
+         * 挑错的话就是「显示已连接、按键永远没反应」—— 用户又不知道去哪手动换通道。
+         *
+         * 这个方法把所有通知特征挨个试一遍：每个通道守一小段时间窗，
+         * 谁送来数据就锁定谁。使用方法：点按钮后**一边按设备的实体按键**，
+         * 按键产生的那条通道立刻会暴露。全试完仍无数据则明确报错并给出下一步。
+         */
+        async function autoTune({ perChannel = 2000, onProgress } = {}) {
+          if (!state.server) throw new Error('尚未连接');
+          if (!state.services.length) await explore();
+          const cands = pickCandidates(state.services);
+          if (!cands.length) throw new Error('这个设备没有任何可订阅的通知通道');
+
+          for (let i = 0; i < cands.length; i++) {
+            const c = cands[i];
+            onProgress?.({ index: i + 1, total: cands.length, uuid: c.characteristic });
+            let seen = null;
+            let handler = null;
+            try {
+              const svc = await state.server.getPrimaryService(c.service);
+              const ch = await svc.getCharacteristic(c.characteristic);
+              handler = (ev) => {
+                const dv = ev.target?.value;
+                if (dv && dv.byteLength > 0 && !seen) {
+                  seen = { bytes: new Uint8Array(dv.buffer.slice(dv.byteOffset, dv.byteOffset + dv.byteLength)), at: Date.now() };
+                }
+              };
+              ch.addEventListener('characteristicvaluechanged', handler);
+              await ch.startNotifications();
+
+              const deadline = Date.now() + perChannel;
+              while (!seen && Date.now() < deadline) {
+                await new Promise((r) => setTimeout(r, 80));
+              }
+              try { await ch.stopNotifications(); } catch { /* 无所谓 */ }
+              try { ch.removeEventListener('characteristicvaluechanged', handler); } catch { /* 已失效 */ }
+            } catch {
+              continue; // 这个通道拿不到（权限/越界），试下一个
+            }
+
+            if (seen) {
+              // 锁定这个通道：走正式订阅，恢复「记住通道 → 断线重连自动恢复」的完整链路
+              await subscribe({ serviceUuid: c.service, characteristicUuid: c.characteristic, silent: true });
+              log('ok', `已锁定计数通道 ${shortUuid(c.characteristic)}（该通道有数据）`);
+              return { ...c, sample: seen.bytes };
+            }
+          }
+          throw new Error('所有通道都没等到数据。请确认设备已开机、靠近手机，并一边按实体按键一边重试');
+        }
+
+        return {
+          state,
+          env: ENV,
+          requestDevice,
+          connect,
+          disconnect,
+          explore,
+          pickCandidates,
+          subscribe,
+          autoTune,
+          readCurrentValue,
+          stopReconnect,
+          findWritable,
+          write,
+          readBattery,
+          readDeviceInfo,
+          log,
+        };
+      }
+
+      // 提供一个明确命名的方法名，避免各模块再导出同名常量
+      const BLE_SUPPORTED = SUPPORTED;
+
+      function normalizeUuid(uuid) {
+        if (!uuid) return '';
+        const s = String(uuid).trim().toLowerCase();
+        if (/^[0-9a-f]{4}$/.test(s)) return `0000${s}-0000-1000-8000-00805f9b34fb`;
+        if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(s)) return s;
+        return s;
+      }
+
+      function shortUuid(uuid) {
+        const s = normalizeUuid(uuid);
+        if (s.startsWith('0000') && s.endsWith('-0000-1000-8000-00805f9b34fb')) return '0x' + s.slice(4, 8).toUpperCase();
+        return s.slice(0, 8) + '…';
+      }
+
+      const SIG_BASE = '-0000-1000-8000-00805f9b34fb';
+      function isStandardUuid(uuid) {
+        const s = normalizeUuid(uuid);
+        return s.startsWith('0000') && s.endsWith(SIG_BASE);
+      }
+
+      Object.assign(__m, { SUPPORTED, ENV, explainBleError, createBle, BLE_SUPPORTED, normalizeUuid, shortUuid, isStandardUuid });
+
+    }).call(undefined);
+  };
+
+  __defs["src/lib/store.js"] = function (__m) {
+    (function () {
+      /**
+       * 存储层：localStorage 的薄封装 + 每个实体一个 key。
+       *
+       * 设计取舍：不用 IndexedDB。原因有三：
+       *  1) 本地存储必须「断网也能用、清缓存前不丢」——localStorage 同步读写更简单可靠；
+       *  2) 数据量小（一个用户十年功课也就几千条日记录、几万条事件）；
+       *  3) 便于用户自己导出/备份 JSON，符合「数据属于用户」的原则。
+       *
+       * 所有写入都是「整体覆盖 + 版本号」，并做一次 JSON 序列化的防御性 try/catch。
+       */
+
+      const NS = 'onc';        // open nianfo counter
+      const SCHEMA_KEY = `${NS}.schema`;
+
+      const SCHEMA_VERSION = 1;
+
+      function key(name) {
+        return `${NS}.${name}`;
+      }
+
+      function read(name, fallback) {
+        try {
+          const raw = localStorage.getItem(key(name));
+          if (raw == null) return structuredCloneSafe(fallback);
+          return JSON.parse(raw);
+        } catch (err) {
+          console.warn(`[store] 读取 ${name} 失败，已回退到默认值`, err);
+          return structuredCloneSafe(fallback);
+        }
+      }
+
+      function write(name, value) {
+        try {
+          localStorage.setItem(key(name), JSON.stringify(value));
+          return true;
+        } catch (err) {
+          console.error(`[store] 写入 ${name} 失败（可能是存储空间已满）`, err);
+          return false;
+        }
+      }
+
+      function remove(name) {
+        localStorage.removeItem(key(name));
+      }
+
+      function listKeys() {
+        const out = [];
+        for (let i = 0; i < localStorage.length; i++) {
+          const k = localStorage.key(i);
+          if (k?.startsWith(`${NS}.`)) out.push(k);
+        }
+        return out;
+      }
+
+      /** 估算当前占用 */
+      function usageBytes() {
+        return listKeys().reduce((sum, k) => sum + k.length + (localStorage.getItem(k)?.length || 0), 0);
+      }
+
+      function exportAll() {
+        const data = {};
+        for (const k of listKeys()) {
+          if (k === SCHEMA_KEY) continue;
+          data[k.slice(NS.length + 1)] = JSON.parse(localStorage.getItem(k));
+        }
+        return {
+          app: 'open-nianfo-counter',
+          schema: SCHEMA_VERSION,
+          exportedAt: new Date().toISOString(),
+          data,
+        };
+      }
+
+      /**
+       * 导入备份。merge=true 时对日记录/事件做合并（同一 id 以导入的为准），
+       * merge=false 时整体覆盖。返回导入摘要。
+       */
+      function importAll(payload, { merge = true } = {}) {
+        if (!payload || payload.app !== 'open-nianfo-counter' || typeof payload.data !== 'object') {
+          throw new Error('不是本应用导出的备份文件');
+        }
+        const incoming = payload.data;
+        const summary = { settings: 0, practices: 0, logs: 0, sessions: 0 };
+
+        if (!merge) {
+          for (const k of listKeys()) if (k !== SCHEMA_KEY) localStorage.removeItem(k);
+        }
+
+        // 设置：覆盖
+        if (incoming.settings) {
+          write('settings', incoming.settings);
+          summary.settings = 1;
+        }
+
+        // 功课列表：按 id 合并
+        if (Array.isArray(incoming.practices)) {
+          const byId = new Map(read('practices', []).map((p) => [p.id, p]));
+          for (const p of incoming.practices) {
+            byId.set(p.id, { ...byId.get(p.id), ...p });
+            summary.practices++;
+          }
+          write('practices', [...byId.values()]);
+        }
+
+        // 日记录：按 practiceId + date 合并（数值取较大者，避免覆盖多设备累加值）
+        if (Array.isArray(incoming.logs)) {
+          const list = read('logs', []);
+          const idx = new Map(list.map((l, i) => [`${l.practiceId}|${l.date}`, i]));
+          for (const l of incoming.logs) {
+            const k = `${l.practiceId}|${l.date}`;
+            if (idx.has(k)) {
+              const cur = list[idx.get(k)];
+              list[idx.get(k)] = {
+                ...cur,
+                count: Math.max(cur.count || 0, l.count || 0),
+                total: Math.max(cur.total || 0, l.total || 0),
+                seconds: Math.max(cur.seconds || 0, l.seconds || 0),
+                sessions: Math.max(cur.sessions || 0, l.sessions || 0),
+              };
+            } else {
+              list.push(l);
+            }
+            summary.logs++;
+          }
+          write('logs', list);
+        }
+
+        // 会话：按 id 去重
+        if (Array.isArray(incoming.sessions)) {
+          const list = read('sessions', []);
+          const ids = new Set(list.map((s) => s.id));
+          for (const s of incoming.sessions) {
+            if (!ids.has(s.id)) {
+              list.push(s);
+              summary.sessions++;
+            }
+          }
+          write('sessions', list);
+        }
+
+        write(SCHEMA_KEY, SCHEMA_VERSION);
+        return summary;
+      }
+
+      function clearAll() {
+        for (const k of listKeys()) localStorage.removeItem(k);
+      }
+
+      function structuredCloneSafe(v) {
+        if (v === undefined) return undefined;
+        try {
+          return structuredClone(v);
+        } catch {
+          return JSON.parse(JSON.stringify(v));
+        }
+      }
+
+      Object.assign(__m, { SCHEMA_VERSION, read, write, remove, listKeys, usageBytes, exportAll, importAll, clearAll });
+
+    }).call(undefined);
+  };
+
+  __defs["src/lib/time.js"] = function (__m) {
+    (function () {
+      /**
+       * 时间与日期工具。全部使用「本地日期」（设备所在时区），不做 UTC 换算 ——
+       * 修行功课是按当地自然日算的，用户不会希望晚上 11 点念的佛号算到第二天。
+       */
+
+      const pad = (n) => String(n).padStart(2, '0');
+
+      /** 本地日期键：YYYY-MM-DD */
+      function dayKey(date = new Date()) {
+        const d = date instanceof Date ? date : new Date(date);
+        return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+      }
+
+      /** 从 YYYY-MM-DD 还原为本地 0 点 Date */
+      function parseDayKey(key) {
+        const [y, m, d] = key.split('-').map(Number);
+        return new Date(y, m - 1, d);
+      }
+
+      /** 相对今天偏移 n 天的日期键（n 可为负） */
+      function shiftDay(key, n) {
+        const d = parseDayKey(key);
+        d.setDate(d.getDate() + n);
+        return dayKey(d);
+      }
+
+      /** 两个日期键相差天数（a - b） */
+      function dayDiff(a, b) {
+        return Math.round((parseDayKey(a) - parseDayKey(b)) / 86400000);
+      }
+
+      function nowMs() {
+        return Date.now();
+      }
+
+      /** 毫秒 -> "1 小时 23 分" 这样的可读文本 */
+      function humanDuration(ms) {
+        const totalMinutes = Math.floor(ms / 60000);
+        const h = Math.floor(totalMinutes / 60);
+        const m = totalMinutes % 60;
+        if (h <= 0 && m <= 0) return `${Math.max(0, Math.round(ms / 1000))} 秒`;
+        if (h <= 0) return `${m} 分钟`;
+        return m ? `${h} 小时 ${m} 分` : `${h} 小时`;
+      }
+
+      /** 毫秒 -> mm:ss 或 h:mm:ss */
+      function clockFromMs(ms) {
+        const total = Math.max(0, Math.floor(ms / 1000));
+        const h = Math.floor(total / 3600);
+        const m = Math.floor((total % 3600) / 60);
+        const s = total % 60;
+        return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
+      }
+
+      /** 时间戳 -> HH:mm */
+      function clockOf(ts) {
+        const d = new Date(ts);
+        return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+      }
+
+      /**
+       * 计算今日「有效天数」进度：把当天已过的时间按比例折算。
+       * 用于「今日 5000 遍，按时间线性推算现在应完成多少」。
+       */
+      function dayFraction(date = new Date()) {
+        const seconds = date.getHours() * 3600 + date.getMinutes() * 60 + date.getSeconds();
+        return Math.min(1, seconds / 86400);
+      }
+
+      Object.assign(__m, { dayKey, parseDayKey, shiftDay, dayDiff, nowMs, humanDuration, clockFromMs, clockOf, dayFraction });
+
+    }).call(undefined);
+  };
+
+  __defs["src/lib/model.js"] = function (__m) {
+    (function () {
+      /**
+       * 数据模型 + 状态管理（单一数据源）。
+       *
+       * 这里是整个应用唯一的「真相」。UI 层只调用这里暴露的函数，不直接碰 storage。
+       * 每次变更后触发 bus 事件，UI 自行订阅重绘。
+       */
+      const { read, write } = __import("src/lib/store.js");
+      const { dayKey, nowMs } = __import("src/lib/time.js");
+      const { emit } = __import("src/lib/bus.js");
+      const SCHEMA = 1;
+
+      /* ------------------------------------------------------------------ */
+      /* 默认值                                                              */
+      /* ------------------------------------------------------------------ */
+
+      const DEFAULT_SETTINGS = {
+        schema: SCHEMA,
+        activePracticeId: null,
+        autoStartOnConnect: true,
+        sound: true,
+        soundVolume: 0.6,
+        vibration: true,
+        wakeLock: true,
+        keepScreenOn: true,
+        dailyGoalAutoExtend: false,
+        deviceFilterPrefix: '',      // 设备名过滤前缀，留空则不过滤
+        deviceFilterService: '',     // 服务 UUID 过滤（留空不过滤）
+        reversedHistory: false,
+        theme: 'auto',
+      };
+
+      /**
+       * 内置功课通道。刻意不预置具体功课名（念佛/大悲咒…）——
+       * 修什么功课每个人不一样，预置的具体名字反而要一个个改掉。
+       * 这里只给三条空白通道，名字、单位、目标都请自己改（设置页可改名）。
+       */
+      const BUILTIN_PRACTICES = [
+        { name: '功课 1', unit: '次', goal: 108, step: 1, color: '#9c3b2e' },
+        { name: '功课 2', unit: '次', goal: 108, step: 1, color: '#2f6f5e' },
+        { name: '功课 3', unit: '次', goal: 108, step: 1, color: '#455f8a' },
+      ];
+
+      function newId(prefix = 'p') {
+        return `${prefix}_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+      }
+
+      /* ------------------------------------------------------------------ */
+      /* 读取                                                                */
+      /* ------------------------------------------------------------------ */
+
+      let cache = null;
+
+      /**
+       * 旧版默认功课名 → 通用通道名。
+       * 0.1.x 预置了「念佛/阿弥陀经…」这些具体名字，v0.2.0 起默认功课改为空白通道。
+       * 已经在用的浏览器里存着旧数据，光改模板不会生效 —— 需要这段迁移。
+       *
+       * 只改名：用户自定义过的功课（名字不在表里）一律不动；
+       * 用户的计数、目标、单位都原样保留。
+       */
+      const LEGACY_DEFAULT_NAMES = ['念佛', '阿弥陀经', '大悲咒', '心经', '礼佛', '打坐'];
+
+      function migrateLegacyPracticeNames(practices) {
+        const sorted = [...practices].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+        let changed = false;
+        const total = sorted.length;
+        for (let i = 0; i < total; i++) {
+          const p = sorted[i];
+          if (LEGACY_DEFAULT_NAMES.includes(p.name)) {
+            p.name = `功课 ${i + 1}`;
+            // 旧的默认单位（声/遍/拜/分钟）也是替用户做的决定，一并改成通用的「次」
+            if (['声', '遍', '拜', '分钟'].includes(p.unit)) p.unit = '次';
+            changed = true;
+          }
+        }
+        return changed;
+      }
+
+      function ensureCache() {
+        if (cache) return cache;
+        cache = {
+          settings: { ...DEFAULT_SETTINGS, ...read('settings', {}) },
+          practices: read('practices', null),
+          logs: read('logs', []),
+          sessions: read('sessions', []),
+        };
+        if (!Array.isArray(cache.practices) || cache.practices.length === 0) {
+          cache.practices = seedPractices();
+          write('practices', cache.practices);
+        }
+        // v0.1.x → v0.2.0：把旧的预置功课名改成通用通道名
+        if (migrateLegacyPracticeNames(cache.practices)) {
+          write('practices', cache.practices);
+        }
+        if (!cache.settings.activePracticeId || !cache.practices.some((p) => p.id === cache.settings.activePracticeId)) {
+          cache.settings.activePracticeId = cache.practices[0].id;
+          write('settings', cache.settings);
+        }
+        return cache;
+      }
+
+      function seedPractices() {
+        const t = nowMs();
+        return BUILTIN_PRACTICES.map((p, i) => ({
+          id: newId('p'),
+          ...p,
+          order: i,
+          nfcTagId: null,
+          createdAt: t,
+          archived: false,
+        }));
+      }
+
+      const getSettings = () => ensureCache().settings;
+      const getPractices = () => ensureCache().practices.filter((p) => !p.archived);
+      const getAllPractices = () => ensureCache().practices;
+      const getLogs = () => ensureCache().logs;
+      const getSessions = () => ensureCache().sessions;
+
+      function getPractice(id) {
+        return ensureCache().practices.find((p) => p.id === id) || null;
+      }
+
+      function getActivePractice() {
+        const { activePracticeId } = getSettings();
+        return getPractice(activePracticeId) || getPractices()[0] || null;
+      }
+
+      function findPracticeByNfc(tagId) {
+        if (!tagId) return null;
+        const norm = String(tagId).trim().toLowerCase().replace(/[\s:-]/g, '');
+        return ensureCache().practices.find((p) => p.nfcTagId && p.nfcTagId.toLowerCase().replace(/[\s:-]/g, '') === norm) || null;
+      }
+
+      function getLog(practiceId, date = dayKey()) {
+        return ensureCache().logs.find((l) => l.practiceId === practiceId && l.date === date) || null;
+      }
+
+      /** 某功课今日计数（不创建记录） */
+      function todayCount(practiceId) {
+        const l = getLog(practiceId);
+        return l?.count ?? 0;
+      }
+
+      /* ------------------------------------------------------------------ */
+      /* 写入：设置                                                          */
+      /* ------------------------------------------------------------------ */
+
+      function updateSettings(patch) {
+        const s = ensureCache();
+        s.settings = { ...s.settings, ...patch };
+        write('settings', s.settings);
+        emit('settings:changed', s.settings);
+        return s.settings;
+      }
+
+      function setActivePractice(id) {
+        if (!getPractice(id)) return;
+        updateSettings({ activePracticeId: id });
+        emit('practice:active', id);
+      }
+
+      /* ------------------------------------------------------------------ */
+      /* 写入：功课                                                          */
+      /* ------------------------------------------------------------------ */
+
+      function addPractice(partial) {
+        const s = ensureCache();
+        const p = {
+          id: newId('p'),
+          name: '新功课',
+          unit: '遍',
+          goal: 108,
+          step: 1,
+          color: '#9c3b2e',
+          order: s.practices.length,
+          nfcTagId: null,
+          createdAt: nowMs(),
+          archived: false,
+          ...partial,
+        };
+        s.practices.push(p);
+        write('practices', s.practices);
+        emit('practices:changed', s.practices);
+        return p;
+      }
+
+      function updatePractice(id, patch) {
+        const s = ensureCache();
+        const i = s.practices.findIndex((p) => p.id === id);
+        if (i < 0) return null;
+        s.practices[i] = { ...s.practices[i], ...patch, id };
+        write('practices', s.practices);
+        emit('practices:changed', s.practices);
+        return s.practices[i];
+      }
+
+      /** 归档而非物理删除：历史记录仍可查阅、可撤销 */
+      function archivePractice(id) {
+        updatePractice(id, { archived: true });
+        const remaining = getPractices();
+        if (getSettings().activePracticeId === id && remaining[0]) setActivePractice(remaining[0].id);
+      }
+
+      function restorePractice(id) {
+        updatePractice(id, { archived: false });
+      }
+
+      function movePractice(id, delta) {
+        const s = ensureCache();
+        const list = s.practices.filter((p) => !p.archived).sort((a, b) => a.order - b.order);
+        const i = list.findIndex((p) => p.id === id);
+        const j = i + delta;
+        if (i < 0 || j < 0 || j >= list.length) return;
+        [list[i], list[j]] = [list[j], list[i]];
+        list.forEach((p, k) => {
+          const target = s.practices.find((x) => x.id === p.id);
+          target.order = k;
+        });
+        write('practices', s.practices);
+        emit('practices:changed', s.practices);
+      }
+
+      /* ------------------------------------------------------------------ */
+      /* 写入：计数                                                          */
+      /* ------------------------------------------------------------------ */
+
+      function ensureLog(practiceId, date) {
+        const s = ensureCache();
+        let log = s.logs.find((l) => l.practiceId === practiceId && l.date === date);
+        if (!log) {
+          log = {
+            id: newId('l'),
+            practiceId,
+            date,
+            count: 0,
+            total: 0,     // 包含用户手动修正前的累计
+            seconds: 0,
+            sessions: 0,
+            updatedAt: nowMs(),
+          };
+          s.logs.push(log);
+        }
+        return log;
+      }
+
+      /**
+       * 增加计数。source 用于日志/排错：tap | ble | hardware | manual | undo
+       * 返回 { log, practice }
+       */
+      function addCount(practiceId, delta = 1, source = 'tap') {
+        const s = ensureCache();
+        const p = getPractice(practiceId);
+        if (!p) return null;
+        const log = ensureLog(practiceId, dayKey());
+        const before = log.count;
+        log.count = Math.max(0, before + delta);
+        log.total = Math.max(0, (log.total || 0) + delta);
+        log.updatedAt = nowMs();
+        log.lastSource = source;
+        write('logs', s.logs);
+        emit('count:changed', { practiceId, count: log.count, delta: log.count - before, source, log });
+        return { log, practice: p };
+      }
+
+      /** 直接把今日计数设为某值（用于修正） */
+      function setTodayCount(practiceId, value) {
+        const s = ensureCache();
+        const log = ensureLog(practiceId, dayKey());
+        const before = log.count;
+        log.count = Math.max(0, Math.floor(value) || 0);
+        log.total = Math.max(0, (log.total || 0) + (log.count - before));
+        log.updatedAt = nowMs();
+        log.lastSource = 'manual';
+        write('logs', s.logs);
+        emit('count:changed', { practiceId, count: log.count, delta: log.count - before, source: 'manual', log });
+        return log;
+      }
+
+      /** 一轮功课完成（计数达到目标）时调用，累计会话 */
+      function recordRound(practiceId) {
+        const s = ensureCache();
+        const log = ensureLog(practiceId, dayKey());
+        log.sessions = (log.sessions || 0) + 1;
+        log.updatedAt = nowMs();
+        write('logs', s.logs);
+        return log;
+      }
+
+      /** 累加修行时长（秒） */
+      function addSeconds(practiceId, seconds) {
+        if (!seconds || seconds < 1) return;
+        const s = ensureCache();
+        const log = ensureLog(practiceId, dayKey());
+        log.seconds = (log.seconds || 0) + Math.round(seconds);
+        log.updatedAt = nowMs();
+        write('logs', s.logs);
+      }
+
+      /* ------------------------------------------------------------------ */
+      /* 统计                                                                */
+      /* ------------------------------------------------------------------ */
+
+      function statsForPractice(practiceId, days = 7, endKey = dayKey()) {
+        const s = ensureCache();
+        const out = [];
+        for (let i = days - 1; i >= 0; i--) {
+          const d = new Date(`${endKey}T00:00:00`);
+          d.setDate(d.getDate() - i);
+          const k = dayKey(d);
+          const log = s.logs.find((l) => l.practiceId === practiceId && l.date === k);
+          out.push({ date: k, count: log?.count ?? 0, seconds: log?.seconds ?? 0, sessions: log?.sessions ?? 0 });
+        }
+        return out;
+      }
+
+      function totalsForPractice(practiceId) {
+        const s = ensureCache();
+        let all = 0;
+        let days = 0;
+        let seconds = 0;
+        for (const l of s.logs) {
+          if (l.practiceId !== practiceId) continue;
+          all += l.count || 0;
+          seconds += l.seconds || 0;
+          if ((l.count || 0) > 0) days++;
+        }
+        return { all, days, seconds };
+      }
+
+      function overallTotals() {
+        const s = ensureCache();
+        return s.logs.reduce(
+          (acc, l) => {
+            acc.count += l.count || 0;
+            acc.seconds += l.seconds || 0;
+            if ((l.count || 0) > 0) acc.days.add(l.date);
+            return acc;
+          },
+          { count: 0, seconds: 0, days: new Set() }
+        );
+      }
+
+      /* ------------------------------------------------------------------ */
+      /* 会话记录（用于「最近修行」与设备调试）                               */
+      /* ------------------------------------------------------------------ */
+
+      function pushSession(entry) {
+        const s = ensureCache();
+        s.sessions.push({ id: newId('s'), at: nowMs(), ...entry });
+        // 只保留最近 500 条
+        if (s.sessions.length > 500) s.sessions = s.sessions.slice(-500);
+        write('sessions', s.sessions);
+        emit('sessions:changed', s.sessions);
+      }
+
+      /** 危险操作后统一清空内存缓存，强制下次重新读盘 */
+      function invalidateCache() {
+        cache = null;
+      }
+
+      Object.assign(__m, { SCHEMA, DEFAULT_SETTINGS, newId, getSettings, getPractices, getAllPractices, getLogs, getSessions, getPractice, getActivePractice, findPracticeByNfc, getLog, todayCount, updateSettings, setActivePractice, addPractice, updatePractice, archivePractice, restorePractice, movePractice, addCount, setTodayCount, recordRound, addSeconds, statsForPractice, totalsForPractice, overallTotals, pushSession, invalidateCache });
+
+    }).call(undefined);
+  };
+
+  __defs["src/lib/gatt.js"] = function (__m) {
+    (function () {
+      /**
+       * 计数器的「通用计数协议」解析器 —— 协议适配层。
+       *
+       * 背景：厂商 APP 停运后，硬件仍在广播/通知里吐数据，但没有任何公开文档。
+       * 本文件不猜测某个具体厂商的私有格式，而是给出一套「自适应解包」策略：
+       *
+       *   1. 通用计数规范（GenCounter v1）—— 我们推荐硬件/固件实现的公开协议；
+       *   2. 自动学习模式（learn）—— 用户每按一次实体按键，就记录一次通知字节，
+       *      差分解出「计数所在偏移 + 字节序 + 步进」，从而兼容各种私有固件；
+       *   3. 手动映射（manual）—— 用户直接指定偏移/长度/序，作为兜底。
+       *
+       * 所有解析结果都是 { count, battery, seq, extra } 形式，null 表示无有效数据。
+       */
+
+      /** 参考用：常见计数器固件的通知格式臆测枚举，仅用于「自动学习」的候选集合 */
+      const CANDIDATE_FORMATS = [
+        { id: 'u8@0', label: '1 字节无符号 @0', len: 1, little: true },
+        { id: 'u16le@0', label: '2 字节小端 @0', len: 2, little: true },
+        { id: 'u16be@0', label: '2 字节大端 @0', len: 2, little: false },
+        { id: 'u24le@0', label: '3 字节小端 @0', len: 3, little: true },
+        { id: 'u32le@0', label: '4 字节小端 @0', len: 4, little: true },
+        { id: 'u32be@0', label: '4 字节大端 @0', len: 4, little: false },
+        { id: 'u16le@1', label: '2 字节小端 @1', len: 2, little: true, offset: 1 },
+        { id: 'u32le@1', label: '4 字节小端 @1', len: 4, little: true, offset: 1 },
+        { id: 'u16be@1', label: '2 字节大端 @1', len: 2, little: false, offset: 1 },
+        { id: 'u32be@1', label: '4 字节大端 @1', len: 4, little: false, offset: 1 },
+        { id: 'u16le@2', label: '2 字节小端 @2', len: 2, little: true, offset: 2 },
+        { id: 'u32le@2', label: '4 字节小端 @2', len: 4, little: true, offset: 2 },
+        { id: 'u16be@2', label: '2 字节大端 @2', len: 2, little: false, offset: 2 },
+        { id: 'u16be@3', label: '2 字节大端 @3', len: 2, little: false, offset: 3 },
+      ];
+
+      /* ------------------------------------------------------------------ */
+      /* 基础读取                                                            */
+      /* ------------------------------------------------------------------ */
+
+      function readUint(bytes, offset, len, little) {
+        if (!bytes || offset < 0 || offset + len > bytes.length) return null;
+        let v = 0;
+        if (little) {
+          for (let i = len - 1; i >= 0; i--) v = v * 256 + bytes[offset + i];
+        } else {
+          for (let i = 0; i < len; i++) v = v * 256 + bytes[offset + i];
+        }
+        return v;
+      }
+
+      function toHex(bytes) {
+        return Array.from(bytes || [], (b) => b.toString(16).padStart(2, '0')).join(' ');
+      }
+
+      /* ------------------------------------------------------------------ */
+      /* GenCounter v1 —— 公开推荐协议                                       */
+      /* ------------------------------------------------------------------ */
+      /**
+       * 帧格式（小端）：
+       *   [0]    0xA5        魔数（固定）
+       *   [1]    0x01        版本
+       *   [2]    类型       0x01=计数通知 0x02=按键事件 0x03=状态
+       *   [3..6] uint32 LE  设备单调递增计数（开机累计，不清零）
+       *   [7]    uint8      低功耗电量 0..100，0xFF=未知
+       *   [8]    uint8      序号 0..255，用于识别丢包
+       *   [9]    uint8      校验：前面 9 字节按位异或
+       *
+       * 设备收到主机写入的「清零」指令后应回发一帧类型 0x03 的状态帧。
+       */
+      const GC_MAGIC = 0xa5;
+      const GC_VERSION = 0x01;
+      const GC_TYPE = { COUNT: 0x01, BUTTON: 0x02, STATUS: 0x03 };
+
+      function parseGenCounter(bytes) {
+        if (!bytes || bytes.length < 10) return null;
+        if (bytes[0] !== GC_MAGIC) return null;
+        const version = bytes[1];
+        const type = bytes[2];
+        const count = readUint(bytes.subarray(3, 7), 0, 4, true);
+        const batteryRaw = bytes[7];
+        const seq = bytes[8];
+        let x = 0;
+        for (let i = 0; i < 9; i++) x ^= bytes[i];
+        const checksumOk = x === bytes[9];
+        return {
+          protocol: 'gencounter',
+          version,
+          type,
+          count,
+          battery: batteryRaw === 0xff ? null : batteryRaw,
+          seq,
+          rssi: null,
+          extra: { checksumOk },
+          valid: checksumOk,
+        };
+      }
+
+      /** 构造主机 -> 设备的 GenCounter 指令帧 */
+      function buildGenCounterCommand(opcode, payload = []) {
+        const frame = new Uint8Array(4 + payload.length);
+        frame[0] = GC_MAGIC;
+        frame[1] = GC_VERSION;
+        frame[2] = opcode;
+        frame[3] = payload.length;
+        frame.set(payload, 4);
+        return frame;
+      }
+
+      /* ------------------------------------------------------------------ */
+      /* 自动学习                                                            */
+      /* ------------------------------------------------------------------ */
+
+      /**
+       * 学习器：用户按一次实体按键 → 设备通知一帧。
+       *
+       * 目标不是「猜中厂商的原始格式」，而是找出「一个能正确累加的窗口」：
+       * 窗口 [off, off+len) + 字节序 → 每按一次，读数严格 +1。
+       *
+       * 难点在于「片段」：16 位计数 0x00FE,0x00FF,0x0100 的低字节流是 FE,FF,00,01，
+       * 单看低字节也像「255→0 回绕 +1」，但它其实丢了一次进位。区分依据：
+       *   - 正确窗口：值只 +1，永不回绕（除非真到满量程），低位重启次数为 0；
+       *   - 片段窗口：低位重启次数明显偏多。
+       * 因此按 lowRestarts 升序、长度升序排序，就能把「完整字段」排在「片段」前面。
+       */
+      function learnFromSamples(samples) {
+        const frames = (samples || []).filter((s) => s && s.bytes && s.bytes.length >= 1 && s.kind === 'press');
+        if (frames.length < 3) {
+          return { learned: [], confidence: 0, reason: '样本不足（至少需要 3 次按键）' };
+        }
+
+        const lenCount = new Map();
+        for (const f of frames) lenCount.set(f.bytes.length, (lenCount.get(f.bytes.length) || 0) + 1);
+        const targetLen = [...lenCount.entries()].sort((a, b) => b[1] - a[1])[0][0];
+        const seq = frames.filter((f) => f.bytes.length === targetLen);
+        const bytesOf = seq.map((f) => f.bytes);
+
+        /**
+         * 窗口检查。返回 { wraps, lowRestarts } 或 null（不是逐次 +1）。
+         * lowRestarts：值落在「小值区」（≤ 25% 满量程）的帧数，越少越像完整计数。
+         */
+        const checkWindow = (off, len, little) => {
+          const max = Math.pow(2, len * 8);
+          let wraps = 0;
+          let lowRestarts = 0;
+          let prev = readUint(bytesOf[0], off, len, little);
+          if (prev == null) return null;
+          if (prev <= max * 0.25) lowRestarts++;
+          for (let i = 1; i < bytesOf.length; i++) {
+            const cur = readUint(bytesOf[i], off, len, little);
+            if (cur == null) return null;
+            if (cur <= max * 0.25) lowRestarts++;
+            if (cur === prev) continue;
+            if (cur > prev) {
+              if (cur - prev !== 1) return null;
+              prev = cur;
+              continue;
+            }
+            // cur < prev：只接受真正的满量程回绕
+            if (prev >= max * 0.75 && cur <= max * 0.25) { wraps++; prev = cur; continue; }
+            return null;
+          }
+          return { wraps, lowRestarts };
+        };
+
+        const candidates = [];
+
+        // 逐字节「是否有用」（取值是否变化过），用于判断窗口是否只包住了常量字节
+        const byteUseful = [];
+        for (let i = 0; i < targetLen; i++) {
+          byteUseful.push(new Set(bytesOf.map((b) => b[i])).size > 1);
+        }
+
+        for (let off = 0; off < targetLen; off++) {
+          for (let size = 1; size <= 4 && off + size <= targetLen; size++) {
+            // 首尾都不能是常量字节：常量只可能是帧头/帧尾/填充，不是计数的一部分
+            if (!byteUseful[off] || !byteUseful[off + size - 1]) continue;
+            // 内部全常量 → 中间隔着不相关字节，说明不是连续计数字段
+            let innerConstant = false;
+            for (let k = 1; k < size - 1; k++) if (!byteUseful[off + k]) { innerConstant = true; break; }
+            if (innerConstant) continue;
+
+            for (const little of [true, false]) {
+              const r = checkWindow(off, size, little);
+              if (!r) continue;
+              candidates.push({
+                offset: off, len: size, little, step: 1,
+                wraps: r.wraps,
+                low: r.lowRestarts,
+              });
+            }
+          }
+        }
+
+        if (!candidates.length) {
+          return {
+            learned: [], confidence: 0,
+            reason: '未发现逐次 +1 的字段。请确认按键确实触发了通知，并在计数接近 255 / 65535 时多按几下，让进位路径暴露出来。',
+            sampleCount: seq.length, frameLen: targetLen,
+          };
+        }
+
+        // 同一窗口的两种字节序去重：保留末帧读数更大的那个
+        const byWindow = new Map();
+        for (const c of candidates) {
+          const key = `${c.offset}:${c.len}`;
+          const cur = byWindow.get(key);
+          if (!cur) { byWindow.set(key, c); continue; }
+          const last = bytesOf[bytesOf.length - 1];
+          if ((readUint(last, c.offset, c.len, c.little) || 0) > (readUint(last, cur.offset, cur.len, cur.little) || 0)) {
+            byWindow.set(key, c);
+          }
+        }
+        const uniq = [...byWindow.values()];
+
+        /**
+         * 朴素贝叶斯式打分，避免「选最长」或「选最短」两种极端：
+         *  score = -log P(观测到这样的低位分布 | 这就是计数字段)
+         *
+         *  对真实计数字段，末帧读数应该接近这段时间的真实按键总数（用帧数估计），
+         *  且 lowRestarts 说明它经历过多少次「从头开始」；片段窗口会把进位算成重启，
+         *  于是 low 偏大，得分变低。
+         */
+        const n = bytesOf.length;
+
+        /**
+         * 打分函数。
+         *
+         * 关键洞察：我们「知道」这次学习的真实增量。
+         * 用户按了 n 下，设备内部计数就 +n（除非他在设备上同时清零，极少见）。
+         * 所以一个候选窗口是对的还是错的，可以用一个硬指标判断：
+         *
+         *     (末帧读数 - 首帧读数 + 满量程×回绕次数) 必须 ≈ n-1
+         *
+         * 片段窗口在这个式子上必然偏差巨大：
+         * 16 位计数从 200 涨到 319，低字节只从 200 变到 63（回绕一次），
+         * 算出来是 63-200+256 = 119，勉强对；但只要样本不含回绕，
+         * 低字节就完全不涨（如 10→20 时低字节 10→20 也对得上，此时无法区分，
+         * 只能靠长度先验）。
+         *
+         * 因此分数 = 一致性（占绝对主导） + 长度先验（打平局时用）。
+         */
+        const expected = n - 1;
+        const scored = uniq.map((c) => {
+          const max = Math.pow(2, c.len * 8);
+          const first = readUint(bytesOf[0], c.offset, c.len, c.little) || 0;
+          const last = readUint(bytesOf[n - 1], c.offset, c.len, c.little) || 0;
+          const observed = last - first + max * c.wraps;
+          // 相对偏差：0 表示完美吻合
+          const mismatch = Math.abs(observed - expected) / Math.max(1, expected);
+
+          // 一致性硬门槛：偏差超过 20% 且不是「完全不变」，基本可判为错误候选
+          const consistent = mismatch <= 0.2 ? 1 : 0;
+
+          // 长度先验：更长的字段能容忍更多进位，在样本未能区分时优先相信长字段
+          const lenPrior = (c.len - 1) * 0.5;
+
+          const score = consistent * 10 - mismatch * 5 + lenPrior;
+          return { ...c, score, observed, mismatch, consistent };
+        });
+
+        scored.sort((x, y) => y.consistent - x.consistent || y.score - x.score || x.len - y.len || x.offset - y.offset);
+
+        // 若最优候选与次优差距极小，则都列出来让用户点选，不硬猜
+        const best = scored.slice(0, 3).map(({ offset, len, little, step }) => ({ offset, len, little, step }));
+        const margin = scored.length > 1 ? scored[0].score - scored[1].score : 1;
+        return {
+          learned: best,
+          confidence: margin > 1.2 ? 0.95 : margin > 0.4 ? 0.8 : 0.6,
+          reason: 'ok',
+          sampleCount: seq.length,
+          frameLen: targetLen,
+          allCandidates: scored.length,
+        };
+      }
+
+      /** 用学习结果解析任意通知帧 */
+      function isMappingUsable(mapping, frameLen) {
+        if (!mapping) return false;
+        const { offset = 0, len = 2 } = mapping;
+        if (frameLen == null) return true;
+        return offset + len <= frameLen;
+      }
+
+      function parseWithMapping(bytes, mapping) {
+        if (!mapping || !bytes) return null;
+        const { offset = 0, len = 2, little = true, batteryOffset = null, scale = 1 } = mapping;
+        const raw = readUint(bytes, offset, len, little);
+        if (raw == null) return null;
+        const battery = batteryOffset != null ? readUint(bytes, batteryOffset, 1, true) : null;
+        return {
+          protocol: 'mapping',
+          count: raw * scale,
+          battery: battery != null && battery <= 100 ? battery : null,
+          seq: null,
+          extra: { raw, offset, len, little },
+          valid: true,
+        };
+      }
+
+      /* ------------------------------------------------------------------ */
+      /* 通用入口                                                            */
+      /* ------------------------------------------------------------------ */
+
+      /**
+       * 按当前配置解析一帧。
+       * cfg = { protocol: 'auto' | 'gencounter' | 'mapping', mapping: {...}, lastCount }
+       *
+       * auto 的判定顺序（顺序本身就是经验）：
+       *   1. GenCounter：有魔数就认，最可靠；
+       *   2. mapping：只在「配过且读出来不是废值」时采用；
+       *   3. 启发式兜底：**完全没配过**时才用，且会把解析结果写回 mapping，
+       *      这样后面每帧都走同一条路，不会因为帧长变化跳来跳去。
+       *
+       * 这里踩过两个真实的坑，值得写下来：
+       *
+       * 坑一：没配过 mapping 时，默认配置是「小端 2 字节 @0」。
+       *      设备发 00 00 03 E9（大端 1000），按小端读出来是 0 ——
+       *      于是「连上了、有数据、计数就是不动」。用户看到的现象就是计数坏了。
+       *      所以「配过」和「没配过」必须区别对待。
+       *
+       * 坑二：不能简单地「小端读出 0 就换大端」。设备真的被清零时读数就是 0，
+       *      那样每帧都会在两种字节序之间来回跳，数字忽大忽小。
+       *      所以只在流程刚开始（还没有上一帧读数）时才做这种纠正，
+       *      一旦定下来就锁住不动，除非用户手动改配置。
+       */
+      function parseFrame(bytes, cfg = {}) {
+        const proto = cfg.protocol || 'auto';
+        if (proto === 'gencounter') return parseGenCounter(bytes);
+        if (proto === 'mapping') return parseWithMapping(bytes, cfg.mapping);
+
+        const gc = parseGenCounter(bytes);
+        if (gc && gc.valid) return gc;
+
+        const configured = cfg.mappingConfigured === true;
+        if (!configured) return parseHeuristic(bytes);
+
+        // —— 已配置：先按配置走，只在「开局就反常」时纠正一次 ——
+        if (!isMappingUsable(cfg.mapping, bytes.length)) return parseHeuristic(bytes);
+        const m = parseWithMapping(bytes, cfg.mapping);
+        if (!m) return parseHeuristic(bytes);
+
+        // 只在「整帧看起来就是个计数、但按配置读出 0」这种明显对不上的时候纠正。
+        //
+        // 判据必须同时满足两条，才敢推翻用户/学习的配置：
+        //   1. 整帧字节完全相同且不为 0 —— 这就是「同一个小值重复填充」的样子，
+        //      典型来源是启发式的错误猜测，不是真实计数器帧；
+        //   2. 开局第一帧（还没有上一帧读数可比）。
+        //
+        // 反例（必须留给 mapping 处理）：
+        //   · 帧里有真实结构（AA 帧头 + 计数），配置读出 0 就是设备真被清零了；
+        //   · 整帧全 0，也是清零。
+        // 这两种情况如果被"纠正"，每清零一次就会凭空多记几十上百下。
+        const uniform = bytes.length > 0 && bytes.every((b) => b === bytes[0]) && bytes[0] !== 0;
+        if (cfg.lastCount == null && m.count === 0 && uniform) {
+          const better = parseHeuristic(bytes);
+          if (better && better.count > 0) {
+            return {
+              ...better,
+              extra: { ...better.extra, correctedFrom: 'mapping-zero' },
+            };
+          }
+        }
+        return m;
+      }
+
+      /**
+       * 启发式：没有配置时怎么猜。
+       *
+       * 计数器固件的通知帧绝大多数是「整个 payload 就是一个总计数」，且普遍用网络序（大端）。
+       * 所以策略按优先级：
+       *   1. 整帧 ≤4 字节 → 整帧大端（最常见：4 字节大端总计数）
+       *   2. 整帧更长 → 取尾部 4 字节大端（帧头通常是常量/魔数，计数在尾部）
+       *   3. 大端读出来大得不合理（低位全是 0、高位却很大）→ 那是小端帧，改用小端
+       *
+       * 判据说明：小端 1000 是 E8 03 00 00，按大端读成了 38 亿 —— 一个念佛计数器
+       * 不可能有这个数，所以用「数量级是否合理」来区分字节序，比拍脑袋选一边可靠。
+       * 全 0 就返回 0，不硬凑。
+       */
+      function parseHeuristic(bytes) {
+        const n = bytes?.length || 0;
+        if (!n) return null;
+
+        const window = n <= 4 ? { off: 0, len: n } : { off: n - 4, len: 4 };
+        const be = readUint(bytes, window.off, window.len, false) ?? 0;
+        const le = readUint(bytes, window.off, window.len, true) ?? 0;
+
+        // 大端读数超过 1 亿：计数器上不可能出现，几乎肯定是小端帧被反着读了
+        const implausible = be > 1e8;
+        const little = implausible && le > 0 && le < 1e8;
+
+        return {
+          protocol: 'heuristic',
+          count: little ? le : be,
+          battery: null,
+          seq: null,
+          extra: { offset: window.off, len: window.len, little },
+          valid: true,
+        };
+      }
+
+      /**
+       * 把绝对计数转换为「本次增量」。
+       * 计数器通常单调递减/递增回绕，需要处理设备清零、换电池、跨日等异常。
+       * 返回 { delta, reset }
+       */
+      function diffCount(prev, next, opts = {}) {
+        const maxWrap = opts.maxWrap ?? 0xffffffff;
+        if (prev == null) return { delta: 0, reset: true, reason: 'first' };
+        if (next === prev) return { delta: 0, reset: false };
+        if (next > prev) {
+          const jump = next - prev;
+          // 跳跃过大视为用户手动改设备上的数（例如清零后再累加），不计入增量
+          if (jump > (opts.maxJump ?? 1000)) return { delta: 0, reset: true, reason: 'jump' };
+          return { delta: jump, reset: false };
+        }
+        // next < prev：可能回绕，也可能清零
+        const wrapDelta = maxWrap - prev + next + 1;
+        if (wrapDelta <= (opts.maxJump ?? 1000)) return { delta: wrapDelta, reset: false, wrapped: true };
+        return { delta: 0, reset: true, reason: 'reset' };
+      }
+
+      Object.assign(__m, { CANDIDATE_FORMATS, readUint, toHex, GC_MAGIC, GC_VERSION, GC_TYPE, parseGenCounter, buildGenCounterCommand, learnFromSamples, isMappingUsable, parseWithMapping, parseFrame, parseHeuristic, diffCount });
+
+    }).call(undefined);
+  };
+
+  __defs["src/lib/probe.js"] = function (__m) {
+    (function () {
+      const { on, emit } = __import("src/lib/bus.js");
+      const { getSettings, getActivePractice } = __import("src/lib/model.js");
+      const { createBle } = __import("src/lib/ble.js");
+      const { parseFrame, diffCount } = __import("src/lib/gatt.js");
+      /**
+       * 帧解析 + 自动学习调度器。
+       * 把 BLE 原始帧变成「绝对计数」，再交给 engine 转成增量。
+       *
+       * ⚠ 这里藏着一个极易被忽略、后果又很严重的设计问题，值得记录下来：
+       *
+       *   增量算法需要「上一帧读数」当基准，所以第一帧只能当基线、不计入。
+       *   如果设备「只在按键时才通知」，那么用户按下的第一下收到的恰好是第一帧 ——
+       *   被当成基线丢掉了。表现就是：按一下，数不动；再按一下，才 +1。
+       *   用户会觉得「少记了一个」，进而怀疑整个工具不可信。
+       *
+       *   解法不是改算法（那会让真正的首帧误加），而是**把基线提前**：
+       *   连接成功后主动读一次当前值（readCurrentValue），或退一步用「首帧后静默 1.5 秒
+       *   内的多次按键只算第一次」的补正策略。前者可靠，后者兜底。
+       *
+       *   另一个同类问题：设备「周期推送」时，每帧字节可能完全相同（没有变化）。
+       *   此时 delta=0 是正确的，但如果用户在两次推送之间按了 3 下，
+       *   下一帧会一次性跳 +3 —— 所以 delta 必须允许 >1，不能只认 +1。
+       */
+      function createProbe({ ble, engine, persist }) {
+        const cfg = {
+          protocol: 'auto',
+          mapping: { offset: 0, len: 2, little: true, batteryOffset: null, scale: 1 },
+          channel: null,
+          ...(persist || {}),
+        };
+        /**
+         * 「用户配过 mapping 吗」——这个标志决定了能不能信默认值。
+         *
+         * 默认 mapping 是「小端 2 字节 @0」，对很多设备是错的：
+         * 发 00 00 03 E9（大端 1000）的设备会被读成 0，于是「有数据、有解析，
+         * 但计数就是不动」。没配过的时候必须让启发式来猜，
+         * 不能拿一个没人确认过的默认值当真。见 gatt.js 的 parseFrame 注释。
+         */
+        cfg.mappingConfigured = cfg.mappingConfigured === true;
+        let learning = false;
+        let samples = [];
+        let lastAbs = null;
+
+        /**
+         * 首帧基线状态：
+         *   null       → 还没建立基线，下一帧只当基准
+         *   'read'     → 基线来自「主动读取」，之后第一帧就是真实增量，不丢
+         *   'guessed'  → 基线来自「首帧」，如果它其实是用户刚按出来的，会少算 1
+         */
+        let baseline = null;
+        let firstFrameAt = 0;
+
+        /** 最近一次倒灌回放的待处理存量（delta/frames/at），用户处理前一直保留 */
+        let lastSync = null;
+
+        /**
+         * 首帧丢 1 的补救：
+         * 当基线来自"首帧"且该帧是用户按键触发的（连接后 3 秒内就到了），
+         * 说明这一下被吃掉了，补记 1。这个判定很保守，宁可偶尔多记也不要长期少记。
+         */
+        let pendingFirstPress = false;
+
+        /**
+         * 历史数据倒灌检测。
+         *
+         * 大白牛车这类设备能缓存一个月的计数，蓝牙一连上就高频倒灌给 APP。
+         * 人手极限大约每秒 5~6 下；明显快过这个速度的连续帧只能是设备在回放历史。
+         * 这批帧绝不能计入今日 —— 否则一连接，今天的计数就凭空多出几千。
+         * 正确做法：只滚动基线（对齐到设备的最新累计值），把倒灌的「存量」跳过，
+         * 之后的实时按键才正常计入。
+         */
+        const burst = { active: false, pending: [], lastAt: 0, total: 0, first: null, last: null, startAbs: null };
+        let burstTimer = 0;
+        const RAPID_GAP = 120;       // 帧间隔小于 120ms 视为「机器速度」（人手极限约 5~6 次/秒）
+        const BURST_LEN = 3;         // 连续 3 帧机器速度 → 判定为倒灌
+        const BURST_SILENCE = 2000;  // 倒灌中静默 2 秒视为结束
+
+        function setConfig(patch) {
+          Object.assign(cfg, patch);
+          if (patch.mapping) {
+            cfg.mapping = { ...cfg.mapping, ...patch.mapping };
+            // 用户（或自动学习）明确给了映射，就认为「配过了」：
+            // 此时应当尊重它，不再让启发式插手
+            if (patch.mappingConfigured === undefined) cfg.mappingConfigured = true;
+          }
+          lastAbs = null;
+          baseline = null;
+          emit('probe:config', cfg);
+        }
+
+        function setChannel(ch) {
+          cfg.channel = ch;
+          lastAbs = null;
+          baseline = null;
+          emit('probe:channel', ch);
+        }
+
+        function startLearning() {
+          learning = true;
+          samples = [];
+        }
+
+        function stopLearning() {
+          learning = false;
+          return samples.slice();
+        }
+
+        /** 处理一帧 */
+        function handleFrame({ bytes, characteristic, at, fromRead = false }) {
+          // 把"配过没配过"和"上一帧读数"一起交给解析器：
+          // 后者用于判断这是不是开局第一帧（只有开局才允许纠正错误的字节序）
+          const parsed = parseFrame(bytes, { ...cfg, lastCount: lastAbs });
+          emit('ble:frame', { bytes, characteristic, at, parsed, fromRead });
+
+          if (learning) {
+            // 主动读出来的帧不是按键，不能混进学习样本，否则会污染"每按一次 +1"的规律
+            if (!fromRead) samples.push({ bytes: Array.from(bytes), kind: 'press', at });
+            return;
+          }
+          if (!parsed) return;
+
+          const practice = getActivePractice();
+          if (!practice) return;
+
+          if (parsed.count == null) return;
+
+          /* ---- 历史数据倒灌保护（详见上方 burst 注释） ----
+           * 关键设计：机器速度的帧先「攒着不入账」，
+           * 攒够 3 帧才判定为倒灌并整体丢弃 —— 这样连判定过程中的帧也不会漏计进去。
+           * 若随后一帧间隔恢复了人速，说明刚才只是按得快，把攒下的帧照常入账。
+           */
+          const t = at || Date.now();
+          const gap = burst.lastAt ? t - burst.lastAt : Infinity;
+
+          // 倒灌进行中：静默超过阈值才结束
+          if (burst.active) {
+            if (gap > BURST_SILENCE) {
+              finishBurst();
+            } else {
+              burst.total += 1;
+              burst.lastAt = t;
+              if (burst.first == null) burst.first = parsed.count;
+              burst.last = parsed.count;
+              lastAbs = parsed.count;   // 只滚动基线，存量不计入
+              pendingFirstPress = false;
+              // 关键：结束后设备可能再也不发帧，「下一帧到来时再检查静默」永远等不到。
+              // 必须自己起定时器，静默 2 秒后主动收尾，否则提示卡永远出不来。
+              clearBurstTimer();
+              burstTimer = setTimeout(finishBurst, BURST_SILENCE + 100);
+              return;
+            }
+          }
+
+          const rapid = gap < RAPID_GAP;
+          if (rapid) {
+            burst.pending.push({ count: parsed.count, at: t });
+            burst.lastAt = t;
+            if (burst.pending.length >= BURST_LEN) {
+              // 连续 3 帧机器速度：判定为倒灌，攒下的帧整体丢弃
+              clearBurstTimer();
+              burst.active = true;
+              burst.total = burst.pending.length;
+              burst.pending = [];
+              // startAbs 记下倒灌前的基线，结束时 last - startAbs 就是回放的存量步数
+              burst.startAbs = lastAbs == null ? parsed.count : lastAbs;
+              burst.first = parsed.count;
+              burst.last = parsed.count;
+              lastAbs = parsed.count;
+              if (baseline == null) {
+                baseline = 'synced';
+                emit('probe:baseline', { count: parsed.count, source: 'synced' });
+              }
+              pendingFirstPress = false;
+              emit('ble:history-sync', { started: true });
+            } else {
+              // 还没到判定阈值：设一个兜底定时器。
+              // 若之后再也没有帧（比如用户最后一波按得很快然后就停了），
+              // 攒着的帧不能永远卡着 —— 静默 150ms 后按「人速」入账。
+              //
+              // 为什么是 150ms 而不是更保守的 400ms：v0.2.0 用 400ms 时，
+              // 按得快的用户反馈「计数有延迟、不是每按一次就同步」—— 攒帧的代价
+              // 全让真实用户承担了。而真倒灌时第 3 帧在 ~100ms 内就到、
+              // 当场就判定为倒灌，根本轮不到这个定时器出手，所以 150ms 足够安全，
+              // 人手连续快按的滞后也缩短到几乎无感。
+              clearBurstTimer();
+              burstTimer = setTimeout(() => {
+                if (burst.pending.length) {
+                  flushPendingAsHuman();
+                }
+              }, 150);
+            }
+            // 无论判定结果如何，攒着的帧先不入账（人速确认后再说）
+            return;
+          }
+
+          // 间隔恢复了人速：如果之前攒了帧，说明是「按得快的真人」，照常入账
+          clearBurstTimer();
+          if (burst.pending.length) {
+            flushPendingAsHuman();
+          }
+          burst.lastAt = t;
+          processNormal(parsed.count, t, fromRead);
+        }
+
+        function flushPendingAsHuman() {
+          const queued = burst.pending;
+          burst.pending = [];
+          for (const f of queued) processNormal(f.count, f.at, false);
+        }
+
+        /** 收尾一次倒灌：上报存量步数并复位状态 */
+        function finishBurst() {
+          if (!burst.active) return;
+          clearBurstTimer();
+          burst.active = false;
+          // 回放的存量步数：断线期间用户按的次数可能就在这里面。
+          // 应用无法替用户决定记不记（帧里没有时间戳，分不清是今天按的还是几天前按的），
+          // 所以把 delta 报给界面，由用户一键选择「计入今天」或「不记」。
+          const delta = (burst.last != null && burst.startAbs != null)
+            ? Math.max(0, burst.last - burst.startAbs) : 0;
+          emit('ble:history-sync', { finished: true, frames: burst.total, delta });
+          if (delta > 0) {
+            // 存下来：回放发生时用户可能不在设备页，事件没人听。
+            // 设备页挂载时从这里读「待处理的存量」，提示卡才不会漏掉。
+            lastSync = { delta, frames: burst.total, at: Date.now() };
+          }
+          burst.first = null;
+          burst.last = null;
+          burst.startAbs = null;
+        }
+
+        function clearBurstTimer() {
+          if (burstTimer) { clearTimeout(burstTimer); burstTimer = 0; }
+        }
+
+        /** 正常入账路径：基线判定 + 增量计算。倒灌检测通过后走这里。 */
+        function processNormal(count, t, fromRead) {
+          const parsed = { count };
+
+          /* ---- 建立基线 ---- */
+          if (lastAbs == null) {
+            lastAbs = count;
+            if (fromRead) {
+              // 最理想：基线来自主动读取，之后第一帧就是真实增量，绝不会丢第一次按键
+              baseline = 'read';
+              pendingFirstPress = false;
+            } else {
+              baseline = 'guessed';
+              firstFrameAt = t;
+              // 这一帧究竟是谁触发的？两种可能：
+              //   (a) 设备连上后主动推一次当前值 —— 那它就是基线，不能补记
+              //   (b) 用户按了一下，设备才发第一帧 —— 这一下被当基线吃掉了，要补
+              // 区分依据：只读特征能读到的，说明设备本就会主动给值，(a) 更可能；
+              // 读不到的，设备多半"只在按键时发"，(b) 更可能。
+              // 另外连接后 3 秒内就到的帧，更像用户按的。
+              const sinceConnect = Date.now() - (ble?.state?.connectedAt || 0);
+              const devicePushesOnItsOwn = ble?.state?.readable === true;
+              pendingFirstPress = !devicePushesOnItsOwn && sinceConnect < 3000;
+              if (pendingFirstPress) {
+                emit('ble:baseline', {
+                  count,
+                  note: '首帧已作为基准；若这一帧是你刚按出来的，将在收到下一帧时自动补记',
+                });
+              }
+            }
+            emit('probe:baseline', { count, source: baseline });
+            return;
+          }
+
+          /* ---- 正常增量 ---- */
+          const prev = lastAbs;
+          const { delta, reset, reason } = diffCount(prev, count, { maxJump: 2000 });
+          lastAbs = count;
+
+          if (delta > 0) {
+            let n = delta;
+
+            // 首帧基线补救：这一帧证明设备确实在累加，说明之前的"基准帧"是真实按键
+            if (pendingFirstPress) {
+              n += 1;
+              pendingFirstPress = false;
+              emit('ble:first-press-compensated', { extra: 1 });
+            }
+
+            const capped = Math.min(n, 200); // 防御：单帧最多补 200，防止设备跳变把记录撑爆
+            const practice = getActivePractice();
+            if (practice) {
+              for (let i = 0; i < capped; i++) engine.bump(1, 'ble', { practice });
+            }
+            emit('ble:frame-applied', { delta: capped, parsed, requested: n });
+            if (capped < n) {
+              emit('ble:resync', { reason: 'jump-capped', from: n, to: capped });
+            }
+          } else if (count !== prev) {
+            // 计数变小但不是回绕：设备被清零/换电池，属于真正的重置
+            pendingFirstPress = false;
+          }
+
+          if (reset) {
+            // 设备刚开机 / 换电池 / 被清零：把当前值当新基线，不计入，避免一次记入几千
+            emit('ble:resync', { reason, count });
+            pendingFirstPress = false;
+          }
+        }
+
+        /** 连接成功后调用，把基线提前固定住，避免吃掉第一次按键 */
+        function primeBaseline() {
+          lastAbs = null;
+          baseline = null;
+          pendingFirstPress = false;
+        }
+
+        /** 用户在提示卡上做了选择（计入/不记）后调用，避免下次进设备页又弹出来 */
+        function clearHistorySync() {
+          lastSync = null;
+        }
+
+        return {
+          cfg,
+          setConfig,
+          setChannel,
+          startLearning,
+          stopLearning,
+          handleFrame,
+          primeBaseline,
+          clearHistorySync,
+          get learning() { return learning; },
+          get baseline() { return baseline; },
+          get lastHistorySync() { return lastSync; },
+        };
+      }
+
+      Object.assign(__m, { createProbe });
+
+    }).call(undefined);
+  };
+
+  __defs["src/lib/engine.js"] = function (__m) {
+    (function () {
+      /**
+       * 计数引擎：把「各种来源的点击」统一成一次计数。
+       *
+       * 来源：
+       *   tap      — 手机屏幕上的大按钮
+       *   key      — 键盘空格/回车（桌面、蓝牙自拍杆/脚踏开关都可以）
+       *   ble      — 蓝牙计数器按键后推送的增量
+       *   nfc      — 贴 NFC 标签自动切换功课
+       *
+       * 关键设计：
+       *  - 所有来源最终都是「加 N」，不直接写存储，避免并发覆盖；
+       *  - 每轮完成（达到目标）时记录一次 session（用于累计遍数/打卡天数），
+       *    并可选自动开始下一轮；
+       *  - 保留一个短时间的事件缓冲，供「设备诊断」画波形。
+       */
+      const { on, emit } = __import("src/lib/bus.js");
+      const { addCount, addSeconds, recordRound, getActivePractice, todayCount, getSettings, pushSession, updatePractice } = __import("src/lib/model.js");
+      function createEngine() {
+        const st = {
+          sessionStartedAt: null,
+          lastRoundAt: null,
+          roundCount: 0,
+          recent: [],       // 最近事件（诊断画图用），最多 200 条
+          blePrev: null,    // 上一次蓝牙绝对计数
+          bleTotal: 0,      // 本次连接内蓝牙累计增量
+        };
+
+        let tickTimer = null;
+        let lastTick = Date.now();
+
+        function now() { return Date.now(); }
+
+        function logEvent(entry) {
+          st.recent.push({ ...entry, at: entry.at || now() });
+          if (st.recent.length > 200) st.recent.shift();
+          emit('engine:event', entry);
+        }
+
+        /** 统一入口 */
+        function bump(delta = 1, source = 'tap', meta = {}) {
+          const practice = meta.practice || getActivePractice();
+          if (!practice) return null;
+          if (!st.sessionStartedAt) st.sessionStartedAt = now();
+
+          const before = todayCount(practice.id);
+          const res = addCount(practice.id, delta, source);
+          if (!res) return null;
+
+          const after = res.log.count;
+          const goal = Math.max(1, Number(practice.goal) || 1);
+
+          // 跨轮：可能一次加了很多（例如蓝牙积压），需要补记多轮
+          if (before < goal && after >= goal) {
+            const roundsCrossed = Math.floor(after / goal) - Math.floor(before / goal);
+            for (let i = 0; i < Math.max(1, roundsCrossed); i++) {
+              recordRound(practice.id);
+              st.roundCount++;
+            }
+            st.lastRoundAt = now();
+            emit('round:complete', {
+              practice,
+              roundIndex: Math.floor(after / goal),
+              at: st.lastRoundAt,
+            });
+            if (getSettings().dailyGoalAutoExtend) {
+              // 目标自动顺延：把目标调到下一个整轮，避免「一轮完成就停」
+              updatePractice(practice.id, { goal: goal * (Math.floor(after / goal) + 1) });
+            }
+          }
+
+          logEvent({ source, delta, count: after, practiceId: practice.id });
+          emit('engine:bump', { practice, delta, count: after, source });
+          return res;
+        }
+
+        /** 蓝牙帧处理：交由外部传入解析好的绝对计数 */
+        function applyBleAbsolute(absCount, practice) {
+          const prev = st.blePrev;
+          st.blePrev = absCount;
+          if (prev == null) {
+            logEvent({ source: 'ble', kind: 'sync', abs: absCount });
+            return 0;
+          }
+          if (absCount === prev) return 0;
+          let delta = absCount - prev;
+          if (delta < 0) delta = 0;         // 设备清零或换电池，不补
+          if (delta > 500) delta = 0;       // 异常跳变，丢弃
+          if (delta === 0) return 0;
+          st.bleTotal += delta;
+          // 一次可能回来多个（BLE 断连重连后积压），循环补上
+          let last = null;
+          for (let i = 0; i < delta; i++) last = bump(1, 'ble', { practice });
+          return delta;
+        }
+
+        /** 累计修行时长：每 10 秒滴答一次，只在「本轮还没完成」时计时 */
+        function startTicker() {
+          if (tickTimer) return;
+          lastTick = now();
+          tickTimer = setInterval(() => {
+            const t = now();
+            const dt = Math.round((t - lastTick) / 1000);
+            lastTick = t;
+            if (dt <= 0 || dt > 60) return;
+            const p = getActivePractice();
+            if (!p) return;
+            if (todayCount(p.id) > 0) addSeconds(p.id, dt);
+          }, 10000);
+        }
+
+        function stopTicker() {
+          if (tickTimer) clearInterval(tickTimer);
+          tickTimer = null;
+        }
+
+        function resetSession() {
+          st.sessionStartedAt = null;
+          st.blePrev = null;
+          st.bleTotal = 0;
+          st.roundCount = 0;
+        }
+
+        function endSession() {
+          const p = getActivePractice();
+          if (p && st.sessionStartedAt) {
+            pushSession({
+              practiceId: p.id,
+              practiceName: p.name,
+              startedAt: st.sessionStartedAt,
+              endedAt: now(),
+              count: todayCount(p.id),
+              rounds: st.roundCount,
+              source: 'manual',
+            });
+          }
+          resetSession();
+        }
+
+        // 外部可探测：页面隐藏时暂停计时，避免后台挂机刷时长
+        if (typeof document !== 'undefined') {
+          document.addEventListener('visibilitychange', () => {
+            if (document.hidden) stopTicker();
+            else startTicker();
+          });
+        }
+
+        on('ble:disconnected', () => { st.blePrev = null; });
+        on('round:complete', () => {
+          // 一轮完成时打一次卡，用于「最近修行」与统计页的会话列表
+          const p = getActivePractice();
+          if (p) {
+            pushSession({ practiceId: p.id, practiceName: p.name, count: todayCount(p.id), kind: 'round' });
+          }
+        });
+
+        startTicker();
+
+        return { state: st, bump, applyBleAbsolute, startTicker, stopTicker, endSession, resetSession, logEvent };
+      }
+
+      Object.assign(__m, { createEngine });
+
+    }).call(undefined);
+  };
+
+  __defs["src/lib/nfc.js"] = function (__m) {
+    (function () {
+      /**
+       * NFC 标签：贴一张标签在佛珠/蒲团旁，手机一碰自动切到对应功课。
+       * Android Chrome 支持 NDEFReader；不支持时静默降级（不影响其他功能）。
+       */
+
+      function nfcSupported() {
+        return typeof window !== 'undefined' && 'NDEFReader' in window;
+      }
+
+      /**
+       * 开始监听标签。onTag({ serialNumber, records, practiceId })
+       * 返回一个 stop 函数。
+       */
+      async function startScan(onTag, onError) {
+        if (!nfcSupported()) {
+          onError?.(new Error('当前设备/浏览器不支持 NFC 读取'));
+          return () => {};
+        }
+        try {
+          const reader = new window.NDEFReader();
+          await reader.scan({ signal: undefined });
+          const handler = (ev) => {
+            const urlRecord = ev.message?.records?.find((r) => r.recordType === 'url');
+            const textRecord = ev.message?.records?.find((r) => r.recordType === 'text');
+            onTag({
+              serialNumber: ev.serialNumber,
+              practiceId: parsePracticeFromUrl(urlRecord),
+              text: textRecord ? safeDecodeText(textRecord.data) : null,
+              raw: ev,
+            });
+          };
+          reader.addEventListener('reading', handler);
+          return () => reader.removeEventListener('reading', handler);
+        } catch (err) {
+          onError?.(err);
+          return () => {};
+        }
+      }
+
+      /** 写标签：把当前功课写进标签，附带一个 URL 方便将来直接用手机碰开 */
+      async function writeTag({ url, text }) {
+        if (!nfcSupported()) throw new Error('当前设备不支持 NFC 写入');
+        const writer = new window.NDEFWriter();
+        const records = [];
+        if (url) records.push({ recordType: 'url', data: url });
+        if (text) records.push({ recordType: 'text', data: text, lang: 'zh' });
+        await writer.write({ records }, { overwrite: true });
+      }
+
+      function parsePracticeFromUrl(rec) {
+        if (!rec) return null;
+        try {
+          const txt = typeof rec.data === 'string' ? rec.data : new TextDecoder().decode(rec.data);
+          const u = new URL(txt);
+          return u.searchParams.get('practice');
+        } catch {
+          return null;
+        }
+      }
+
+      function safeDecodeText(data) {
+        try {
+          return new TextDecoder().decode(data);
+        } catch {
+          return null;
+        }
+      }
+
+      /** 生成一个指向当前功课的深链，方便写入 NFC 标签 */
+      function practiceDeepLink(practiceId) {
+        const u = new URL(location.href);
+        u.hash = '';
+        u.searchParams.set('practice', practiceId);
+        return u.toString();
+      }
+
+      Object.assign(__m, { nfcSupported, startScan, writeTag, practiceDeepLink });
+
+    }).call(undefined);
+  };
+
+  __defs["src/ui/device-sdk.js"] = function (__m) {
+    (function () {
+      const { read, write, importAll, clearAll, exportAll } = __import("src/lib/store.js");
+      /* ---------- 允许「登录即用」的域白名单（Origin 层级） ---------- */
+      const DEFAULT_ALLOWED_ORIGINS = [
+        'https://yourname.github.io',
+        'http://localhost:5173',
+        'http://127.0.0.1:5173',
+      ];
+
+      const CAPABILITIES = [
+        { id: 'practices:read', label: '读取功课列表' },
+        { id: 'practices:write', label: '新增/修改功课' },
+        { id: 'counts:read', label: '读取今日与历史计数' },
+        { id: 'counts:write', label: '写入计数（如网页端点击）' },
+        { id: 'data:export', label: '导出全部数据（JSON）' },
+        { id: 'data:import', label: '导入/恢复数据' },
+      ];
+
+      const STORE_KEY = 'deviceTokens';
+
+      function loadTokens() {
+        const arr = read(STORE_KEY, []);
+        return Array.isArray(arr) ? arr : [];
+      }
+
+      function saveTokens(arr) {
+        write(STORE_KEY, arr.slice(0, 50));
+      }
+
+      function tokenCount() {
+        return loadTokens().length;
+      }
+
+      /**
+       * 「智能键」授权对话：用户在设置页给第三方网页/脚本授权读写本设备。
+       * 这里只做能力授权，token 只存在本机（localStorage），不上传任何服务器。
+       */
+      function showAuthorizeDialog({ mode = 'new', existing = null, onStart } = {}) {
+        const root = document.createElement('div');
+        root.className = 'modal-backdrop';
+        const scopes = existing?.scopes || [];
+        root.innerHTML = `
+          <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="authTitle">
+            <h2 id="authTitle">${mode === 'existing' ? '更新已有授权' : '授权网页端接入'}</h2>
+            <p class="muted" style="font-size:.85rem">网页端将能读写你的修行数据。你可以随时在这里关闭。</p>
+            <div class="field-group">
+              <label class="field">授权名称</label>
+              <input type="text" name="name" placeholder="例如：家里的笔记本" value="${existing?.name || ''}" />
+            </div>
+            <div class="field-group">
+              <label class="field">来源域（可选）</label>
+              <input type="text" name="origin" placeholder="https://yourname.github.io" value="${existing?.origin || ''}" />
+            </div>
+            <div class="field-group">
+              <label class="field">允许的能力</label>
+              <ul class="scope-list">
+                ${CAPABILITIES.map((c) => `
+                  <li>
+                    <label>
+                      <input type="checkbox" value="${c.id}" ${scopes.includes(c.id) ? 'checked' : ''} />
+                      <span>${c.label}</span>
+                    </label>
+                  </li>`).join('')}
+              </ul>
+            </div>
+            <div class="modal-actions">
+              <button type="button" class="ghost" data-act="cancel">取消</button>
+              <button type="button" class="primary" data-act="ok">开始授权</button>
+            </div>
+          </div>
+        `;
+        document.body.appendChild(root);
+
+        const close = () => root.remove();
+        root.querySelector('[data-act=cancel]').addEventListener('click', close);
+        root.querySelector('[data-act=ok]').addEventListener('click', async () => {
+          const name = root.querySelector('[name=name]').value.trim();
+          const origin = root.querySelector('[name=origin]').value.trim();
+          const picked = [...root.querySelectorAll('input[type=checkbox]:checked')].map((x) => x.value);
+          if (!name) { alert('请填写授权名称'); return; }
+          if (!picked.length) { alert('请至少选择一项能力'); return; }
+          close();
+          await grantAndWrite({ name, origin, scopes: picked, mode, onStart });
+        });
+      }
+
+      async function grantAndWrite({ name, origin, scopes, mode, onStart }) {
+        const tokens = loadTokens();
+        const id = crypto.getRandomValues(new Uint8Array(8)).reduce((s, b) => s + b.toString(16).padStart(2, '0'), '');
+        const record = {
+          id,
+          name,
+          origin,
+          scopes,
+          issuedAt: Date.now(),
+          lastSeenAt: null,
+        };
+        const next = mode === 'existing'
+          ? tokens.map((t) => (t.id === existing?.id ? { ...t, ...record } : t))
+          : [...tokens, record].slice(-50);
+        saveTokens(next);
+        if (typeof onStart === 'function') {
+          try {
+            await onStart(record);
+          } catch (err) {
+            console.warn('[device-sdk] 写入设备失败', err);
+          }
+        }
+      }
+
+      function listTokens() {
+        return loadTokens();
+      }
+
+      function revokeToken(id) {
+        saveTokens(loadTokens().filter((t) => t.id !== id));
+      }
+
+      /* ---------- 备份 ---------- */
+      function backupNow() {
+        const payload = exportAll();
+        payload.generatedBy = 'open-nianfo-counter';
+        const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = `open-nianfo-backup-${new Date().toISOString().slice(0, 10)}.json`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+      }
+
+      function doImport(file, opts = { merge: true }) {
+        return new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => {
+            try {
+              const payload = JSON.parse(String(reader.result));
+              resolve(importAll(payload, opts));
+            } catch (err) {
+              reject(err);
+            }
+          };
+          reader.onerror = () => reject(reader.error);
+          reader.readAsText(file);
+        });
+      }
+
+      function wipe() {
+        if (!confirm('将清除本机全部数据（功课、计数、授权）。确定继续？')) return false;
+        const code = prompt('请输入 RESET 以确认：');
+        if (code !== 'RESET') return false;
+        clearAll();
+        location.reload();
+        return true;
+      }
+
+      Object.assign(__m, { CAPABILITIES, tokenCount, showAuthorizeDialog, listTokens, revokeToken, backupNow, doImport, wipe });
+
+    }).call(undefined);
+  };
+
+  __defs["src/ui/simulator.js"] = function (__m) {
+    (function () {
+      /**
+       * 虚拟计数器：在没有硬件、或想在电脑上先跑通流程时使用。
+       *
+       * 它不是「假数据」——它真的走 Web Bluetooth 的 GATT 服务端（Chrome 支持
+       * navigator.bluetooth.requestDevice 的对照侧 BluetoothDevice 无法被模拟），
+       * 所以这里提供一个「本机回环」版本：不改用 BLE，而是直接产生符合 GenCounter v1
+       * 的字节流，交给同一个解析器和引擎，用来验证协议、学习器、计数逻辑是否自洽。
+       *
+       * 打开方式：在地址后加 ?sim=1，或从「设备」页点「使用虚拟计数器」。
+       */
+      const { buildGenCounterCommand, GC_MAGIC, toHex } = __import("src/lib/gatt.js");
+      function createSimulator({ onFrame, onLog } = {}) {
+        const st = {
+          count: 1000,
+          battery: 87,
+          seq: 0,
+          running: false,
+          timer: null,
+          preset: 'gencounter',
+        };
+
+        function frame(type = 0x01) {
+          const b = new Uint8Array(10);
+          b[0] = GC_MAGIC;
+          b[1] = 0x01;
+          b[2] = type;
+          b[3] = st.count & 0xff;
+          b[4] = (st.count >> 8) & 0xff;
+          b[5] = (st.count >> 16) & 0xff;
+          b[6] = (st.count >> 24) & 0xff;
+          b[7] = st.battery;
+          b[8] = st.seq++ & 0xff;
+          let x = 0;
+          for (let i = 0; i < 9; i++) x ^= b[i];
+          b[9] = x;
+          return b;
+        }
+
+        /** 产生「非标准」私有帧，用来测试自动学习 */
+        function frameLegacy(kind = 'u16le') {
+          switch (kind) {
+            case 'u16le':
+              return new Uint8Array([0x7e, st.count & 0xff, (st.count >> 8) & 0xff, 0x00, 0x5a]);
+            case 'u16be':
+              return new Uint8Array([0x5a, (st.count >> 8) & 0xff, st.count & 0xff]);
+            case 'u8':
+              return new Uint8Array([0x11, st.count & 0xff]);
+            default:
+              return frame();
+          }
+        }
+
+        function emit(bytes) {
+          onFrame?.({ bytes, characteristic: 'sim', at: Date.now() });
+        }
+
+        /**
+         * 模拟按键。n=0 时只发一帧「当前值」——对应真实设备「连上后先推一次状态」，
+         * 客户端应把这帧当基线而不是当成一次按键。
+         */
+        function tap(n = 1) {
+          if (n <= 0) {
+            emit(st.preset === 'gencounter' ? frame(0x03) : frameLegacy(st.preset));
+            return;
+          }
+          for (let i = 0; i < n; i++) {
+            st.count += 1;
+            emit(st.preset === 'gencounter' ? frame() : frameLegacy(st.preset));
+          }
+        }
+
+        function start(intervalMs = 700) {
+          if (st.running) return;
+          st.running = true;
+          st.timer = setInterval(() => tap(1), intervalMs);
+          onLog?.({ level: 'ok', msg: `虚拟计数器已启动（每 ${intervalMs}ms 一次）`, at: Date.now() });
+        }
+
+        function stop() {
+          st.running = false;
+          clearInterval(st.timer);
+          st.timer = null;
+          onLog?.({ level: 'info', msg: '虚拟计数器已停止', at: Date.now() });
+        }
+
+        function setPreset(p) { st.preset = p; }
+
+        function reset() { st.count = 0; st.seq = 0; }
+
+        return { state: st, tap, start, stop, setPreset, reset, frame, frameLegacy, toHex };
+      }
+
+      Object.assign(__m, { createSimulator });
+
+    }).call(undefined);
+  };
+
+  __defs["src/lib/progress.js"] = function (__m) {
+    (function () {
+      /**
+       * 进度工具：把计数换算成百分比、剩余量、按时间推算的「应完成」进度。
+       */
+      const { dayFraction } = __import("src/lib/time.js");
+      /**
+       * @param {{count:number, goal:number, step:number}} p
+       * @returns {{pct:number, remain:number, reached:boolean, expected:number, ahead:number}}
+       */
+      function progress({ count = 0, goal = 1, step = 1 }, { useTime = false, now = new Date() } = {}) {
+        const g = Math.max(1, Number(goal) || 1);
+        const c = Math.max(0, Number(count) || 0);
+        const pct = Math.min(100, (c / g) * 100);
+        const remain = Math.max(0, g - c);
+        const reached = c >= g;
+        const expected = useTime ? Math.floor(g * dayFraction(now)) : 0;
+        return { pct, remain, reached, expected, ahead: c - expected, resolvedStep: Math.max(1, Number(step) || 1) };
+      }
+
+      function formatNumber(n) {
+        return Number(n || 0).toLocaleString('zh-CN');
+      }
+
+      /** 把中文单位转成紧凑显示：5000 -> 5,000 */
+      function shortNumber(n) {
+        if (n >= 100000) return `${Math.floor(n / 1000)}k`;
+        return formatNumber(n);
+      }
+
+      Object.assign(__m, { progress, formatNumber, shortNumber });
+
+    }).call(undefined);
+  };
+
+  __defs["src/lib/sound.js"] = function (__m) {
+    (function () {
+      /**
+       * 提示音：用 WebAudio 现场合成木鱼/磬声，不依赖任何音频文件。
+       * 好处：零资源、离线可用、体积小；坏处：音色不如采样，但已经足够区分「有反馈」。
+       */
+
+      let ctx = null;
+
+      function ac() {
+        if (typeof window === 'undefined') return null;
+        const AC = window.AudioContext || window.webkitAudioContext;
+        if (!AC) return null;
+        if (!ctx) ctx = new AC();
+        if (ctx.state === 'suspended') ctx.resume().catch(() => {});
+        return ctx;
+      }
+
+      /** 用户第一次点击时必须解锁音频（浏览器策略） */
+      function unlockAudio() {
+        const c = ac();
+        if (!c) return;
+        const buf = c.createBuffer(1, 1, 22050);
+        const src = c.createBufferSource();
+        src.buffer = buf;
+        src.connect(c.destination);
+        src.start(0);
+      }
+
+      /**
+       * 木鱼声：短促的噪声爆发 + 低通滤波 + 快速衰减
+       * 参数 freq 控制腔体共鸣频率（木鱼越大越低）
+       */
+      function playWoodblock(volume = 0.6, freq = 420) {
+        const c = ac();
+        if (!c || volume <= 0) return;
+        const t0 = c.currentTime;
+
+        // 1) 木头的「咔」：短噪声
+        const len = Math.floor(c.sampleRate * 0.045);
+        const buf = c.createBuffer(1, len, c.sampleRate);
+        const data = buf.getChannelData(0);
+        for (let i = 0; i < len; i++) {
+          const decay = Math.pow(1 - i / len, 6);
+          data[i] = (Math.random() * 2 - 1) * decay;
+        }
+        const noise = c.createBufferSource();
+        noise.buffer = buf;
+
+        const bp = c.createBiquadFilter();
+        bp.type = 'bandpass';
+        bp.frequency.value = freq;
+        bp.Q.value = 3.5;
+
+        const g1 = c.createGain();
+        g1.gain.setValueAtTime(volume * 1.2, t0);
+        g1.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.07);
+
+        noise.connect(bp).connect(g1).connect(c.destination);
+        noise.start(t0);
+        noise.stop(t0 + 0.08);
+
+        // 2) 腔体共鸣：正弦波短音
+        const osc = c.createOscillator();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(freq * 1.62, t0);
+        osc.frequency.exponentialRampToValueAtTime(freq * 0.9, t0 + 0.05);
+        const g2 = c.createGain();
+        g2.gain.setValueAtTime(volume * 0.5, t0);
+        g2.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.12);
+        osc.connect(g2).connect(c.destination);
+        osc.start(t0);
+        osc.stop(t0 + 0.13);
+      }
+
+      /** 一轮完成：一声清亮的长磬 */
+      function playBell(volume = 0.6) {
+        const c = ac();
+        if (!c || volume <= 0) return;
+        const t0 = c.currentTime;
+        const partials = [
+          { f: 880, g: 0.5, d: 2.6 },
+          { f: 1320, g: 0.22, d: 1.8 },
+          { f: 1760, g: 0.14, d: 1.4 },
+          { f: 2637, g: 0.06, d: 0.9 },
+        ];
+        for (const p of partials) {
+          const o = c.createOscillator();
+          o.type = 'sine';
+          o.frequency.value = p.f;
+          const g = c.createGain();
+          g.gain.setValueAtTime(volume * p.g, t0);
+          g.gain.exponentialRampToValueAtTime(0.0001, t0 + p.d);
+          o.connect(g).connect(c.destination);
+          o.start(t0);
+          o.stop(t0 + p.d + 0.05);
+        }
+      }
+
+      function vibrate(pattern = 18) {
+        if (navigator.vibrate) {
+          try { navigator.vibrate(pattern); } catch { /* 忽略 */ }
+        }
+      }
+
+      Object.assign(__m, { unlockAudio, playWoodblock, playBell, vibrate });
+
+    }).call(undefined);
+  };
+
+  __defs["src/ui/page-home.js"] = function (__m) {
+    (function () {
+      /**
+       * 页面：计数（主界面）
+       *
+       * 设计重点：
+       *  - 整块屏幕上半部都能点，老人、单手、闭眼敲都行；
+       *  - 数字最大，其他信息都让位；
+       *  - 蓝牙连上后，实体按键的每一次响动都会「叮」一声并 +1，手机可以揣兜里。
+       */
+      const { h, $, clear, toast } = __import("src/ui/dom.js");
+      const { getActivePractice, getPractices, getSettings, setActivePractice, todayCount, addCount, setTodayCount, getLog, updatePractice } = __import("src/lib/model.js");
+      const { progress, formatNumber } = __import("src/lib/progress.js");
+      const { playWoodblock, playBell, vibrate, unlockAudio } = __import("src/lib/sound.js");
+      const { on, emit } = __import("src/lib/bus.js");
+      const { clockFromMs, dayFraction, humanDuration } = __import("src/lib/time.js");
+      const PRACTICE_ICONS = { 念佛: '念', 阿弥陀经: '经', 大悲咒: '咒', 心经: '心', 礼佛: '拜', 打坐: '坐' };
+
+      function renderHome(root, ctx) {
+        const engine = ctx.engine;
+        let raf = 0;
+        let bumpTimer = 0;
+        const startedAt = Date.now();
+
+        const practice = getActivePractice();
+        if (!practice) {
+          root.append(h('div', { class: 'card center' },
+            h('p', null, '还没有功课。'),
+            h('button', { class: 'primary', onclick: () => ctx.go('settings') }, '去添加功课')));
+          return;
+        }
+
+        /* ---------------- 顶部：功课切换 ---------------- */
+        const practiceStrip = h('div', { class: 'row wrap-row', style: { gap: '6px', marginBottom: '10px', overflowX: 'auto', paddingBottom: '2px' } });
+        const practices = getPractices();
+        for (const p of practices) {
+          const active = p.id === practice.id;
+          practiceStrip.append(h('button', {
+            class: `small ${active ? 'primary' : 'ghost'}`,
+            style: { flex: 'none' },
+            onclick: () => { setActivePractice(p.id); ctx.rerender(); },
+            title: `切换到《${p.name}》`,
+          }, p.name));
+        }
+        practiceStrip.append(h('button', {
+          class: 'small ghost', style: { flex: 'none' },
+          onclick: () => ctx.go('settings'), title: '管理功课',
+        }, '＋'));
+
+        /* ---------------- 计数器卡片 ---------------- */
+        const nameEl = h('div', { class: 'name' }, practice.name);
+        const unitEl = h('span', { class: 'pill' }, `${practice.unit || '遍'} / 日`);
+        const countEl = h('div', { class: 'count-num' }, formatNumber(todayCount(practice.id)));
+        const subEl = h('div', { class: 'count-sub' }, '');
+        const barEl = h('span', { style: { width: '0%' } });
+        // 注意：这一层必须是 0×0 的定位锚点，否则 ripple 的百分比/像素尺寸会被拉伸成圈痕
+        const rippleLayer = h('div', {
+          style: { position: 'absolute', left: '50%', top: '50%', width: '0', height: '0', pointerEvents: 'none' },
+        });
+
+        const tapBtn = h('button', {
+          class: 'tap-area', 'aria-label': `点击计数，《${practice.name}》加 ${practice.step || 1}`,
+          onclick: (ev) => { unlockAudio(); tap(ev); },
+        }, rippleLayer, h('div', { style: { position: 'relative', zIndex: 1, width: '100%' } }, countEl, subEl));
+
+        const progressBar = h('div', { class: 'progress' }, barEl);
+
+        const remainEl = h('div', { class: 'v' }, '—');
+        const roundsEl = h('div', { class: 'v' }, '0');
+        const timeEl = h('div', { class: 'v' }, '00:00');
+
+        const meta = h('div', { class: 'meta-grid' },
+          h('div', { class: 'meta-cell' }, remainEl, h('div', { class: 'k' }, '今日剩余')),
+          h('div', { class: 'meta-cell' }, roundsEl, h('div', { class: 'k' }, '完成轮数')),
+          h('div', { class: 'meta-cell' }, timeEl, h('div', { class: 'k' }, '已修时间')),
+        );
+
+        const minusBtn = h('button', { class: 'ghost', onclick: () => { adjustMinus(); } }, '－ 修正');
+        const plusBtn = h('button', { class: 'ghost', onclick: () => { tap(null, 10); } }, '＋ 10');
+        const editBtn = h('button', { class: 'ghost', onclick: () => editToday() }, '改数值');
+
+        const heroCard = h('div', { class: 'hero-card' },
+          h('div', { class: 'hero-head' }, h('div', { class: 'grow' }, nameEl), unitEl),
+          h('div', { class: 'hero-body' }, tapBtn, progressBar, meta,
+            h('div', { class: 'stepper', style: { marginTop: '14px' } }, minusBtn, plusBtn, editBtn)),
+        );
+
+        /* ---------------- 设备状态条 ---------------- */
+        const deviceBar = h('div', { class: 'device-bar', id: 'deviceBar' });
+        function paintDeviceBar() {
+          clear(deviceBar);
+          const ble = ctx.ble.state;
+          if (ble.connected) {
+            deviceBar.className = 'device-bar ok';
+            deviceBar.append(h('span', { class: 'dot' }), h('span', { class: 'grow' }, `已连接 ${ble.deviceName}`));
+            deviceBar.append(h('span', { class: 'chip' }, `本次 +${ctx.bleDelta()}`));
+            return;
+          }
+          // 断线自动重连中：必须明确说出来。
+          // 否则用户看到「未连接」会以为要手动点，甚至以为数据丢了。
+          if (ble.recovering) {
+            deviceBar.className = 'device-bar warn';
+            deviceBar.append(h('span', { class: 'dot' }),
+              h('span', { class: 'grow' }, `连接中断，正在自动重连…${ble.retries ? `（第 ${ble.retries} 次）` : ''}`));
+            deviceBar.append(h('button', { class: 'small ghost', onclick: () => ctx.go('device') }, '查看'));
+            return;
+          }
+          deviceBar.className = 'device-bar';
+          // 不能连的环境别只写「未连接」，否则用户会反复点「去连接」却永远没反应
+          const env = ctx.ble.env;
+          if (env && !env.hasApi) {
+            deviceBar.append(h('span', { class: 'grow' }, env.short || '当前环境无法连接蓝牙计数器'));
+            deviceBar.append(h('button', { class: 'small ghost', onclick: () => ctx.go('device') }, '看看怎么办'));
+            return;
+          }
+          deviceBar.append(h('span', { class: 'grow' }, '未连接蓝牙计数器 · 可直接点屏幕计数'));
+          deviceBar.append(h('button', { class: 'small ghost', onclick: () => ctx.go('device') }, '去连接'));
+        }
+
+        root.append(practiceStrip, heroCard, deviceBar);
+
+        /* ---------------- 逻辑 ---------------- */
+        function tap(ev, delta = null) {
+          const p = getActivePractice();
+          if (!p) return;
+          const step = delta ?? (Number(p.step) || 1);
+          engine.bump(step, 'tap', { practice: p });
+          if (getSettings().sound) playWoodblock(getSettings().soundVolume, 380 + Math.random() * 60);
+          if (getSettings().vibration) vibrate(12);
+          if (ev) drawRipple(ev);
+          paint();
+        }
+
+        function drawRipple(ev) {
+          const rect = tapBtn.getBoundingClientRect();
+          const cx = rect.width / 2;
+          const cy = rect.height / 2;
+          const x = (ev?.clientX ?? rect.left + cx) - rect.left;
+          const y = (ev?.clientY ?? rect.top + cy) - rect.top;
+          const r = h('span', {
+            class: 'ripple',
+            style: { position: 'absolute', left: `${x}px`, top: `${y}px`, transform: 'translate(-50%, -50%)' },
+          });
+          rippleLayer.append(r);
+          setTimeout(() => r.remove(), 600);
+        }
+
+        function adjustMinus() {
+          const p = getActivePractice();
+          const cur = todayCount(p.id);
+          const step = Number(p.step) || 1;
+          if (cur <= 0) { toast('已经是 0 了'); return; }
+          setTodayCount(p.id, Math.max(0, cur - step));
+          paint();
+        }
+
+        function editToday() {
+          const p = getActivePractice();
+          const cur = todayCount(p.id);
+          const v = prompt(`《${p.name}》今日计数修正为：`, String(cur));
+          if (v == null) return;
+          const n = Number(v);
+          if (!Number.isFinite(n) || n < 0) { toast('请输入非负整数'); return; }
+          setTodayCount(p.id, n);
+          toast('已修正');
+          paint();
+        }
+
+        function paint() {
+          const p = getActivePractice();
+          if (!p) return;
+          const count = todayCount(p.id);
+          const pr = progress({ count, goal: p.goal, step: p.step }, { useTime: true });
+          countEl.textContent = formatNumber(count);
+          barEl.style.width = `${pr.pct}%`;
+          remainEl.textContent = pr.reached ? '✓ 达成' : formatNumber(pr.remain);
+          roundsEl.textContent = String(Math.floor(count / Math.max(1, p.goal)));
+          subEl.textContent = pr.reached
+            ? `目标 ${formatNumber(p.goal)} ${p.unit} 已完成`
+            : `今日目标 ${formatNumber(p.goal)} ${p.unit} · ${pr.pct.toFixed(0)}%`;
+
+          const log = getLog(p.id);
+          timeEl.textContent = clockFromMs((log?.seconds || 0) * 1000);
+          paintDeviceBar();
+        }
+
+        // 每 500ms 刷新（含计时）
+        const tick = () => { paint(); raf = setTimeout(tick, 500); };
+        tick();
+
+        /* ---------------- 事件 ---------------- */
+        const offBump = on('engine:bump', (e) => {
+          if (e.practice?.id !== getActivePractice()?.id) return;
+          countEl.classList.add('bump');
+          clearTimeout(bumpTimer);
+          bumpTimer = setTimeout(() => countEl.classList.remove('bump'), 180);
+          paint();
+        });
+        const offRound = on('round:complete', () => {
+          if (getSettings().sound) playBell(getSettings().soundVolume);
+          if (getSettings().vibration) vibrate([30, 60, 30]);
+          paint();
+        });
+        const offBle = on('ble:frame-applied', () => paint());
+        const offConn = on('ble:connected', () => paint());
+        const offDis = on('ble:disconnected', () => paint());
+
+        // 键盘：空格 / 回车 / 数字键
+        const onKey = (ev) => {
+          if (ev.target.closest('input, textarea, select')) return;
+          if (ev.code === 'Space' || ev.code === 'Enter') {
+            ev.preventDefault();
+            tap(null);
+          }
+        };
+        window.addEventListener('keydown', onKey);
+
+        // 键盘控件的清理
+        ctx.onCleanup(() => {
+          clearTimeout(raf);
+          clearTimeout(bumpTimer);
+          offBump(); offRound(); offBle(); offConn(); offDis();
+          window.removeEventListener('keydown', onKey);
+        });
+      }
+
+      Object.assign(__m, { renderHome });
+
+    }).call(undefined);
+  };
+
+  __defs["src/ui/page-stats.js"] = function (__m) {
+    (function () {
+      /**
+       * 页面：统计
+       *
+       * 只做「自己看自己的」：近 7/30 天柱图、累计、连续天数、每门功课的年度台账。
+       * 不做排名、不做共修、不做社交 —— 那些正是原 APP 最重、最容易变成监控的部分。
+       */
+      const { h, clear, toast } = __import("src/ui/dom.js");
+      const { getPractices, getActivePractice, getLogs, setActivePractice, statsForPractice, totalsForPractice, overallTotals } = __import("src/lib/model.js");
+      const { formatNumber } = __import("src/lib/progress.js");
+      const { humanDuration, dayKey, shiftDay, parseDayKey } = __import("src/lib/time.js");
+      function renderStats(root, ctx) {
+        let range = 7;
+
+        const wrap = h('div', { class: 'stack' });
+        const head = h('div', { class: 'row' });
+        const body = h('div');
+        root.append(head, body);
+
+        function paint() {
+          clear(head);
+          head.append(
+            h('h2', { class: 'grow', style: { margin: 0 } }, '修行统计'),
+            h('button', { class: `small ${range === 7 ? 'primary' : 'ghost'}`, onclick: () => { range = 7; paint(); } }, '7 天'),
+            h('button', { class: `small ${range === 30 ? 'primary' : 'ghost'}`, onclick: () => { range = 30; paint(); } }, '30 天'),
+          );
+
+          clear(body);
+          const practices = getPractices();
+          const all = overallTotals();
+
+          /* --- 总览 --- */
+          const totalCard = h('div', { class: 'card' },
+            h('div', { class: 'meta-grid', style: { marginTop: 0 } },
+              cell(formatNumber(all.count), '累计次数'),
+              cell(String(all.days.size), '有修行的天数'),
+              cell(humanDuration(all.seconds * 1000), '累计时长'),
+            ));
+          body.append(totalCard);
+
+          /* --- 每门功课 --- */
+          for (const p of practices) {
+            const series = statsForPractice(p.id, range);
+            const totals = totalsForPractice(p.id);
+            const max = Math.max(1, ...series.map((s) => s.count));
+            const sum = series.reduce((a, s) => a + s.count, 0);
+            const activeDays = series.filter((s) => s.count > 0).length;
+
+            const bars = h('div', { class: 'bars' });
+            for (const s of series) {
+              const pct = (s.count / max) * 100;
+              bars.append(h('div', { class: 'col', title: `${s.date}  ${s.count}` },
+                h('div', { class: 'bar', style: { height: `${Math.max(2, pct)}%`, opacity: s.count ? '.9' : '.18' } }),
+                h('div', { class: 'lab' }, range === 7 ? s.date.slice(5) : (s.date.slice(8) === '01' ? s.date.slice(5) : '')),
+              ));
+            }
+
+            body.append(h('div', { class: 'card' },
+              h('div', { class: 'row', style: { marginBottom: '6px' } },
+                h('div', { class: 'grow' }, h('h3', { style: { margin: 0 } }, p.name)),
+                h('span', { class: 'chip' }, `目标 ${formatNumber(p.goal)} ${p.unit}`)),
+              h('div', { class: 'count-sub', style: { textAlign: 'left' } },
+                `${range} 天合计 ${formatNumber(sum)} ${p.unit} · 有修行 ${activeDays} 天 · 累计 ${formatNumber(totals.all)} ${p.unit}`),
+              bars,
+            ));
+          }
+
+          /* --- 台账 --- */
+          const logs = getLogs()
+            .filter((l) => l.count > 0)
+            .sort((a, b) => (a.date < b.date ? 1 : -1))
+            .slice(0, 60);
+          const table = h('table', { class: 'tbl' },
+            h('thead', null, h('tr', null,
+              h('th', null, '日期'), h('th', null, '功课'), h('th', { class: 'num' }, '次数'), h('th', { class: 'num' }, '时长'))));
+          const tb = h('tbody');
+          const nameOf = new Map(getPractices().map((p) => [p.id, p.name]));
+          for (const l of logs) {
+            tb.append(h('tr', null,
+              h('td', null, l.date),
+              h('td', null, nameOf.get(l.practiceId) || '（已归档）'),
+              h('td', { class: 'num' }, formatNumber(l.count)),
+              h('td', { class: 'num' }, l.seconds ? humanDuration(l.seconds * 1000) : '—'),
+            ));
+          }
+          table.append(tb);
+          body.append(h('details', { class: 'acc' },
+            h('summary', null, '逐日台账（最近 60 条）'),
+            h('div', { class: 'acc-body', style: { overflowX: 'auto' } }, table)));
+
+          /* --- 导出 --- */
+          body.append(h('div', { class: 'card' },
+            h('p', { class: 'muted', style: { fontSize: '.82rem', margin: '0 0 10px' } },
+              '数据只在你的手机上。换手机、清缓存前请导出一份备份。'),
+            h('div', { class: 'row' },
+              h('button', { class: 'block', onclick: () => ctx.backup() }, '导出 JSON 备份'),
+              h('button', { class: 'block', onclick: () => ctx.exportCsv() }, '导出 CSV 表格'),
+            )));
+        }
+
+        paint();
+      }
+
+      function cell(v, k) {
+        return h('div', { class: 'meta-cell' }, h('div', { class: 'v' }, v), h('div', { class: 'k' }, k));
+      }
+
+      Object.assign(__m, { renderStats });
+
+    }).call(undefined);
+  };
+
+  __defs["src/ui/page-device.js"] = function (__m) {
+    (function () {
+      /**
+       * 页面：设备（蓝牙连接 + 协议诊断 + 自动学习）
+       *
+       * 这是整个「停运替代方案」真正硬核的一页：
+       * 厂商 APP 没了，说明谁的协议都不可靠，所以这里提供三段式路径——
+       *   ① 一键连接 → 自动扫服务 → 自动订阅最像计数的特征
+       *   ② 按几下实体按键 → 工具自动推断「计数字段在哪、几个字节、高低位」
+       *   ③ 把学习结果固化成本机配置，之后可用「手势登录」式的快捷连接（记住设备）
+       */
+      const { h, clear, toast } = __import("src/ui/dom.js");
+      const { on } = __import("src/lib/bus.js");
+      const { getActivePractice, getSettings, updateSettings, getPractice } = __import("src/lib/model.js");
+      const { parseFrame, learnFromSamples, toHex, readUint, CANDIDATE_FORMATS } = __import("src/lib/gatt.js");
+      const { normalizeUuid, shortUuid, SUPPORTED, ENV, explainBleError, isStandardUuid } = __import("src/lib/ble.js");
+      const { PLATFORM } = __import("src/lib/env.js");
+      const { startScan: startNfc, nfcSupported, writeTag, practiceDeepLink } = __import("src/lib/nfc.js");
+      const { createSimulator } = __import("src/ui/simulator.js");
+      /**
+       * 环境自检卡片：把「为什么连不上」拆成「现象 → 原因 → 下一步」。
+       * 只在不能连的时候出现，避免能用的人被一堆警告干扰。
+       */
+      function renderEnvCard(env) {
+        const tone = env.level === 'blocked' ? 'warn' : 'info';
+        return h('div', { class: 'card stack', id: 'envCard' },
+          h('div', { class: 'row' },
+            h('h2', { class: 'grow' }, '为什么这里连不了'),
+            h('span', { class: `pill ${env.level === 'ok' ? 'ok' : 'warn'}` }, env.level === 'blocked' ? '不可用' : '需设置'),
+          ),
+          h('div', { class: `note ${tone}` }, h('b', null, env.title)),
+          h('p', { style: { margin: 0 } }, env.detail),
+          env.steps.length
+            ? h('ol', { class: 'steps' }, ...env.steps.map((s) => h('li', null, s)))
+            : null,
+          h('details', { class: 'acc' },
+            h('summary', null, '技术细节'),
+            h('div', { class: 'acc-body' },
+              h('div', { class: 'kv' }, h('span', null, '页面来源'), h('code', null, env.context)),
+              h('div', { class: 'kv' }, h('span', null, '浏览器内核'), h('code', null, env.browser)),
+              h('div', { class: 'kv' }, h('span', null, '系统'), h('code', null, env.platform)),
+              h('div', { class: 'kv' }, h('span', null, '蓝牙接口'), h('code', null, env.hasApi ? '存在' : '不存在')),
+              h('div', { class: 'kv' }, h('span', null, '错误码'), h('code', null, env.code)),
+              h('p', { class: 'muted', style: { fontSize: '.72rem', marginTop: '8px', wordBreak: 'break-all' } }, env.userAgent || ''),
+            ),
+          ),
+        );
+      }
+
+      /** 桌面端专属提示：电脑连计数器的三个真实坑 */
+      function renderDesktopTips(env) {
+        if (!env.isDesktop || !SUPPORTED) return null;
+        return h('div', { class: 'card stack' },
+          h('h2', null, '在电脑上用的注意事项'),
+          h('ul', { class: 'tight' },
+            h('li', null, h('b', null, '标签页要留在前台。'),
+              ' 切到别的标签页或最小化窗口时，浏览器会把页面定时器和 WebAudio 降频，'
+              + '按键计数不会丢（走的是绝对计数补差），但提示音、屏幕常亮会失效。'),
+            h('li', null, h('b', null, '一台设备只能被一个「中心」连着。'),
+              ' 如果手机上还开着原厂 APP 或其他计数器页面，电脑这边会连上但收不到数据。先把手机蓝牙关掉。'),
+            h('li', null, h('b', null, '蓝牙范围比 WiFi 小得多。'),
+              ' 计数器放在机箱后面、金属桌下都容易掉线。台式机用一个 USB 延长线把蓝牙适配器挪到桌面上，稳定性差很多。'),
+          ),
+          env.platform === PLATFORM.LINUX
+            ? h('p', { class: 'muted', style: { fontSize: '.82rem', margin: 0 } },
+              'Linux 用户额外注意：Chrome 需要 BlueZ 5.41+，且 flatpak / snap 版 Chrome 默认没有蓝牙权限，建议装 deb 官方包。')
+            : null,
+        );
+      }
+
+
+      function renderDevice(root, ctx) {
+        const ble = ctx.ble;
+        const probe = ctx.probe;   // 由 main.js 提供：帧解析与学习状态
+
+        /* ---------------- 连接区 ---------------- */
+        const statusPill = h('span', { class: 'pill' }, '未连接');
+        const devName = h('div', { class: 'muted', style: { fontSize: '.85rem' } }, '未选择设备');
+        const svcList = h('div', { class: 'list' });
+        const logBox = h('div', { class: 'log', id: 'bleLog' }, '(等待连接)');
+
+        const connectBtn = h('button', { class: 'primary block' }, '① 选择并连接计数器');
+        const discoverBtn = h('button', { class: 'block', disabled: true }, '② 扫描服务与特征');
+        const autoSubBtn = h('button', { class: 'block', disabled: true }, '③ 自动订阅最可能的计数通道');
+
+        function paintStatus() {
+          const s = ble.state;
+          statusPill.className = `pill ${s.connected ? 'ok' : ''}`;
+          statusPill.textContent = s.connected ? '已连接' : '未连接';
+          devName.textContent = s.deviceName || '未选择设备';
+          discoverBtn.disabled = !s.connected;
+          autoSubBtn.disabled = !s.services.length;
+          connectBtn.textContent = s.connected ? '断开连接' : (s.device ? '重新连接' : '① 选择并连接计数器');
+          document.dispatchEvent(new CustomEvent('ble-pill', { detail: s }));
+        }
+
+        if (!SUPPORTED) {
+          root.append(renderEnvCard(ENV));
+        }  root.append(h('div', { class: 'card stack' },
+          h('div', { class: 'row' }, h('div', { class: 'grow' }, h('h2', null, '蓝牙计数器'), devName), statusPill),
+          h('div', { class: 'note info' },
+            '首次连接会上报浏览器设备选择框，请选中你的计数器（通常是 DB… / NFO… 之类的名字）。连接后本机记住授权，之后无需重选。'),
+          connectBtn,
+          h('div', { class: 'row' }, discoverBtn, autoSubBtn),
+        ));
+
+        /* ---------------- 协议配置 ---------------- */
+        const protoSel = h('select', {},
+          h('option', { value: 'auto' }, '自动（先试通用协议，再用手动映射）'),
+          h('option', { value: 'gencounter' }, '通用计数协议 v1（0xA5 帧头）'),
+          h('option', { value: 'mapping' }, '手动映射（指定偏移/字节数）'),
+        );
+        const mapOffset = h('input', { type: 'number', min: '0', max: '19', value: '0' });
+        const mapLen = h('select', {}, ...[1, 2, 3, 4].map((n) => h('option', { value: n, selected: n === 2 }, `${n} 字节`)));
+        const mapEndian = h('select', {}, h('option', { value: 'le' }, '小端（低位在前）'), h('option', { value: 'be' }, '大端（高位在前）'));
+        const mapBattery = h('input', { type: 'number', min: '-1', max: '19', placeholder: '留空则不读', value: '' });
+
+        protoSel.value = probe.cfg.protocol || 'auto';
+        if (probe.cfg.mapping) {
+          mapOffset.value = probe.cfg.mapping.offset ?? 0;
+          mapLen.value = probe.cfg.mapping.len ?? 2;
+          mapEndian.value = probe.cfg.mapping.little === false ? 'be' : 'le';
+          mapBattery.value = probe.cfg.mapping.batteryOffset ?? '';
+        }
+
+        function collectMapping() {
+          return {
+            offset: Number(mapOffset.value) || 0,
+            len: Number(mapLen.value) || 2,
+            little: mapEndian.value !== 'be',
+            batteryOffset: mapBattery.value === '' ? null : Number(mapBattery.value),
+          };
+        }
+
+        function saveProto() {
+          probe.setConfig({ protocol: protoSel.value, mapping: collectMapping() });
+          toast('协议配置已保存');
+        }
+
+        const protoCard = h('div', { class: 'card stack' },
+          h('h2', null, '协议解析'),
+          h('p', { class: 'muted', style: { fontSize: '.82rem', margin: 0 } },
+            '不知道设备协议时，先做下面的「自动学习」，它会替你填好这三项。'),
+          h('div', null, h('label', { class: 'field' }, '解析方式'), protoSel),
+          h('div', { class: 'row' },
+            h('div', { class: 'grow' }, h('label', { class: 'field' }, '起始字节'), mapOffset),
+            h('div', { class: 'grow' }, h('label', { class: 'field' }, '长度'), mapLen),
+            h('div', { class: 'grow' }, h('label', { class: 'field' }, '字节序'), mapEndian),
+          ),
+          h('div', null, h('label', { class: 'field' }, '电量字节偏移（可选）'), mapBattery),
+          h('button', { class: 'block', onclick: saveProto }, '保存解析配置'),
+        );
+
+        /* ---------------- 自动学习 ---------------- */
+        const learnLog = h('div', { class: 'log' }, '点「开始学习」，然后按 5 次以上实体按键。');
+        const learnResult = h('div', { class: 'stack' });
+        let learning = false;
+
+        const learnBtn = h('button', { class: 'primary block' }, '开始学习（按 5 次按键）');
+
+        function renderLearnResult(results) {
+          clear(learnResult);
+          if (!results.learned.length) {
+            learnResult.append(h('div', { class: 'note' }, results.reason || '没有识别到规律'));
+            return;
+          }
+          learnResult.append(h('div', { class: 'note info' },
+            `识别到 ${results.learned.length} 个候选字段（样本 ${results.sampleCount} 帧，每帧 ${results.frameLen} 字节，置信度 ${(results.confidence * 100).toFixed(0)}%）。点一下即应用：`));
+          for (const c of results.learned) {
+            learnResult.append(h('div', { class: 'list-item' },
+              h('div', { class: 'grow' },
+                h('div', { class: 't' }, `偏移 ${c.offset} · ${c.len} 字节 · ${c.little ? '小端' : '大端'}`),
+                h('div', { class: 'd' }, `每按一次 +${c.step}`)),
+              h('button', {
+                class: 'small primary',
+                onclick: () => {
+                  probe.setConfig({ protocol: 'mapping', mapping: { offset: c.offset, len: c.len, little: c.little, batteryOffset: null } });
+                  protoSel.value = 'mapping';
+                  mapOffset.value = c.offset; mapLen.value = c.len; mapEndian.value = c.little ? 'le' : 'be';
+                  toast('已应用学习结果');
+                },
+              }, '用这个'),
+            ));
+          }
+        }
+
+        learnBtn.addEventListener('click', () => {
+          if (!ble.state.connected) { toast('请先连接设备'); return; }
+          learning = !learning;
+          learnBtn.textContent = learning ? '学习中…（按 5 次以上按键，再点此停止）' : '开始学习（按 5 次按键）';
+          learnBtn.classList.toggle('primary', !learning);
+          if (learning) {
+            probe.startLearning();
+            clear(learnLog);
+            learnLog.append('学习中。请按实体计数器按键 5 次以上，每次按完等 0.5 秒。');
+          } else {
+            const samples = probe.stopLearning();
+            const res = learnFromSamples(samples);
+            renderLearnResult(res);
+            clear(learnLog);
+            learnLog.append(`已采集 ${samples.length} 帧：\n` + samples.slice(-12).map((s, i) => `#${i + 1}  ${toHex(s.bytes)}`).join('\n'));
+          }
+        });
+
+        const learnCard = h('div', { class: 'card stack' },
+          h('h2', null, '自动学习协议'),
+          h('p', { class: 'muted', style: { fontSize: '.82rem', margin: 0 } },
+            '各家计数器的通知格式五花八门（1、2、4 字节、大小端、带不带时间戳）。这个工具靠「按键 → 字节变化」反推计数字段，通常按 5 次就能认出来。'),
+          learnBtn,
+          learnLog,
+          learnResult,
+        );
+
+        /* ---------------- 实时数据监视（诊断用） ---------------- */
+        // 这一块是整个排查流程的核心：用户遇到「连上但计数不动」时，
+        // 必须先分清是「没收到帧」「帧在但值不变」还是「值在变但没计入」。
+        // 所以每行不只显示解析值，还要显示 delta 与「是否生效」。
+        const rawLog = h('div', { class: 'log' }, '(尚未收到数据)');
+        const diagBox = h('div', { class: 'stack', style: { gap: '6px' } });
+
+        // 「自动寻找通道」：连上了但收不到数据时，挨个试所有通知特征。
+        // 提示用户按着设备按键点按钮 —— 按键产生的通道会立刻暴露。
+        const tuneStatus = h('p', { class: 'muted', style: { fontSize: '.8rem', margin: 0 } });
+        const tuneBtn = h('button', {
+          class: 'block ghost',
+          onclick: async () => {
+            tuneBtn.disabled = true;
+            try {
+              const hit = await ble.autoTune({
+                onProgress: ({ index, total }) => {
+                  tuneStatus.textContent = `正在试第 ${index}/${total} 个通道…请按设备的实体按键`;
+                },
+              });
+              tuneStatus.textContent = `已锁定 ${hit.sample.length} 字节的数据通道，再按一下设备应该就能计数了`;
+              toast('已锁定计数通道');
+            } catch (err) {
+              tuneStatus.textContent = err.message || '没有找到有数据的通道';
+              toast('没等到数据，请一边按按键一边重试', 3000);
+            } finally {
+              tuneBtn.disabled = false;
+            }
+          },
+        }, '找不到通道？自动寻找（先按住设备按键再点我）');
+
+        // 统计信息，帮助快速判断问题类型
+        const stat = { frames: 0, applied: 0, lastCount: null, lastDelta: 0, changed: 0 };
+
+        /**
+         * @param {boolean} justDropped 刚刚收到断线事件的瞬间。
+         *   这个参数是必要的：设备断开的同一帧里 connected 已经是 false，
+         *   但 scheduleReconnect() 还没跑到置位 recovering，两者之间有几十毫秒的空档。
+         *   不传这个标志，用户会看到「未连接（可点连接重试）」闪一下 ——
+         *   恰恰是最容易被误解成「要手动重点一次」的那句话。
+         */
+        const paintDiag = (justDropped = false) => {
+          clear(diagBox);
+          const s = ble.state;
+          // 断线瞬间 recovering 还没置上，用 justDropped 兜住这几十毫秒的空档
+          const recovering = s.recovering || justDropped;
+          const stateText = s.connected ? '已连接'
+            : recovering ? '断线，正在重连…'
+              : s.device ? '未连接（可点「连接」重试）' : '未连接';
+          const rows = [
+            ['收到帧数', String(stat.frames)],
+            ['其中计数变化', String(stat.changed)],
+            ['已计入', String(stat.applied)],
+            ['最新解析值', stat.lastCount == null ? '—' : String(stat.lastCount)],
+            ['连接状态', stateText],
+          ];
+          for (const [k, v] of rows) {
+            diagBox.append(h('div', { class: 'kv' }, h('span', null, k), h('code', null, v)));
+          }
+          // 给出明确的判断，而不是让用户自己猜
+          let hint = null;
+          if (stat.frames === 0 && s.connected) {
+            hint = '一帧都没收到。可能订阅的不是计数通道，或设备只在按键时才发送 —— 按一下实体按钮试试。';
+          } else if (stat.frames > 0 && stat.changed === 0) {
+            hint = '收到了帧，但解析出的计数一直没变。多半是「解析配置」里的字节偏移/长度不对，去上面用自动学习重新识别。';
+          } else if (stat.changed > 0 && stat.applied === 0) {
+            hint = '计数在变，但没有计入。常见原因：当前功课的目标已满、或计数被判定为「设备重置」。看下面日志里的 resync 提示。';
+          } else if (!s.connected) {
+            hint = recovering
+              ? '设备空闲一会儿会自己断开省电，这是硬件行为。正在自动重连，连上后按键会照常计数，不用手动操作。'
+              : '当前没有连接。点上面的「连接」即可，已记住上次用的设备。';
+          }
+          if (hint) {
+            diagBox.append(h('div', { class: 'note info', style: { fontSize: '.8rem' } }, hint));
+          }
+        };
+        paintDiag();
+
+        const rawCard = h('div', { class: 'card stack' },
+          h('h2', null, '实时数据监视'),
+          h('p', { class: 'muted', style: { fontSize: '.82rem', margin: 0 } },
+            '每一行是一帧数据。「解析」是按当前配置算出的设备总计数，「变化」是相对上一帧的增量，「计入」表示有没有记进账本。'),
+          diagBox,
+          tuneBtn,
+          tuneStatus,
+          rawLog,
+        );
+
+        const offFrame = on('ble:frame', (f) => {
+          stat.frames += 1;
+          const c = f.parsed?.count;
+          let deltaTxt = '';
+          if (c != null) {
+            if (stat.lastCount != null && c !== stat.lastCount) {
+              const d = c - stat.lastCount;
+              deltaTxt = d > 0 ? `（+${d}）` : `（${d}，可能是设备清零）`;
+              stat.changed += 1;
+            }
+            stat.lastCount = c;
+          }
+          const src = f.fromRead ? '读取' : '通知';
+          const line = `${new Date(f.at).toLocaleTimeString('zh-CN', { hour12: false })} [${src}] ${toHex(f.bytes)}`
+            + `  ⇒ ${c ?? '解析失败'}${deltaTxt}`
+            + `${f.parsed?.battery != null ? `  🔋${f.parsed.battery}%` : ''}`;
+          if (rawLog.textContent === '(尚未收到数据)') rawLog.textContent = '';
+          rawLog.textContent = `${line}\n${rawLog.textContent}`.slice(0, 6000);
+          paintDiag();
+        });
+
+        const offApplied = on('ble:frame-applied', ({ delta, requested }) => {
+          stat.applied += delta;
+          paintDiag();
+          if (requested && requested > delta) {
+            toast(`检测到一次跳变 ${requested}，只记了 ${delta}（防止误记）`);
+          }
+        });
+
+        const offResync = on('ble:resync', ({ reason, count }) => {
+          const why = reason === 'reset' ? '设备已清零或换过电池'
+            : reason === 'jump' ? '数值跳跃过大'
+              : reason === 'jump-capped' ? '单帧增量过大，已截断'
+                : reason === 'first' ? '首次连接' : reason;
+          toast(`已重新对齐基线：${why}（当前 ${count ?? '—'}）`);
+          paintDiag();
+        });
+
+        const offBaseline = on('probe:baseline', ({ count, source }) => {
+          if (source === 'guessed') {
+            toast(`已把 ${count} 作为基准；之后每按一次都会正常累计`);
+          }
+          paintDiag();
+        });
+
+        const offCompensate = on('ble:first-press-compensated', () => {
+          toast('已补记连接时被当作基准的那一下');
+        });
+
+        // 设备在倒灌历史数据（缓存了一个月的计数连上就回放）：
+        // 必须明确告知「存量没计入」，否则用户看到今天数字没涨会以为又坏了。
+        // 更重要的：断线期间按的次数可能就在这批回放里 —— 设备帧没有时间戳，
+        // 应用分不清是今天按的还是几天前按的，所以给用户一个明确的选择。
+        const syncNote = h('div', { class: 'note info', style: { display: 'none' } });
+        let syncDelta = 0;
+        function showSyncNote(delta, frames) {
+          syncDelta = delta;
+          clear(syncNote);
+          syncNote.style.display = '';
+          syncNote.append(
+            h('div', null, `设备同步了缓存的 ${frames} 帧（约 ${delta} 步）。这可能是断线期间按的，也可能是之前几天按的 —— 设备数据里没有时间，应用分不出来。`),
+            h('div', { class: 'stepper', style: { marginTop: '8px' } },
+              h('button', {
+                class: 'small',
+                onclick: () => {
+                  const p = getActivePractice();
+                  if (p && syncDelta > 0) {
+                    ctx.engine.bump(syncDelta, 'ble-sync', { practice: p });
+                    toast(`已把 ${syncDelta} 步计入《${p.name}》`);
+                  }
+                  probe.clearHistorySync();
+                  syncNote.style.display = 'none';
+                },
+              }, `把这 ${delta} 步计入今天`),
+              h('button', { class: 'small ghost', onclick: () => { probe.clearHistorySync(); syncNote.style.display = 'none'; } }, '不记（这是以前的旧数）'),
+            ),
+          );
+        }
+        const offSync = on('ble:history-sync', ({ started, finished, frames, delta }) => {
+          if (started) {
+            syncNote.style.display = 'none';
+            toast('正在同步设备缓存的历史数据，这部分暂不计入今日', 4000);
+          }
+          if (finished) {
+            if (delta > 0) showSyncNote(delta, frames);
+            else toast('历史数据同步完成，之后的按键正常计数', 3000);
+          }
+        });
+        // 提示卡插在数据日志之前，回放一来用户就能看到
+        rawCard.insertBefore(syncNote, rawLog);
+        // 回放发生时用户可能不在设备页（事件没人听），挂载时主动读一次待处理存量
+        const pendingSync = probe.lastHistorySync;
+        if (pendingSync && pendingSync.delta > 0 && Date.now() - pendingSync.at < 10 * 60 * 1000) {
+          showSyncNote(pendingSync.delta, pendingSync.frames);
+        }
+
+        /* ---------------- 断线 / 重连状态 ---------------- */
+        const offDisc = on('ble:disconnected', ({ manual }) => {
+          paintDiag(!manual);
+          if (!manual) toast('设备断开了，正在自动重连…', 3000);
+        });
+        const offConn = on('ble:connected', () => paintDiag());
+
+        // 重连是异步的（退避等待 → 尝试 → 失败 → 再等），期间状态会变好几次。
+        // 只在 disconnected/connected 两个瞬间重绘的话，用户会看到「未连接」卡在那里不动，
+        // 以为要自己手动点。这里补一个低频轮询，状态一变就重绘，代价可以忽略。
+        let lastSnap = '';
+        const diagTimer = setInterval(() => {
+          const s = ble.state;
+          const snap = `${s.connected}|${s.recovering}|${s.retries}`;
+          if (snap !== lastSnap) {
+            lastSnap = snap;
+            paintDiag();
+          }
+        }, 300);
+
+        /* ---------------- 服务列表 ---------------- */
+        function renderServices(services) {
+          clear(svcList);
+          if (!services?.length) {
+            svcList.append(h('p', { class: 'muted', style: { fontSize: '.85rem' } }, '尚未扫描。'));
+            return;
+          }
+          for (const svc of services) {
+            const body = h('div', { class: 'acc-body' });
+            for (const ch of svc.characteristics) {
+              const flags = [
+                ch.canNotify ? 'notify' : null,
+                ch.canWrite ? 'write' : null,
+                ch.canRead ? 'read' : null,
+              ].filter(Boolean).join(' · ');
+              body.append(h('div', { class: 'list-item' },
+                h('div', { class: 'grow' },
+                  h('div', { class: 't mono', style: { fontSize: '.8rem' } }, ch.uuid),
+                  h('div', { class: 'd' }, flags || '—')),
+                ch.canNotify ? h('button', {
+                  class: 'small',
+                  onclick: async () => {
+                    try {
+                      await ble.subscribe({ serviceUuid: svc.uuid, characteristicUuid: ch.uuid });
+                      probe.setChannel({ serviceUuid: svc.uuid, characteristicUuid: ch.uuid });
+                      toast('已订阅该通道');
+                    } catch (err) { alert('订阅失败：' + err.message); }
+                  },
+                }, '订阅') : null,
+              ));
+            }
+            svcList.append(h('details', { class: 'acc' },
+              h('summary', null,
+                h('span', { class: 'mono', style: { fontSize: '.82rem' } }, svc.uuid),
+                h('span', { class: 'chip right' }, `${svc.characteristics.length} 特征`)),
+              body));
+          }
+        }
+
+        /* ---------------- 事件绑定 ---------------- */
+        connectBtn.addEventListener('click', async () => {
+          try {
+            if (ble.state.connected) { await ble.disconnect(); paintStatus(); return; }
+            if (!ble.state.device) {
+              await ble.requestDevice({
+                namePrefix: getSettings().deviceFilterPrefix || '',
+                serviceUuid: getSettings().deviceFilterService || '',
+              });
+            }
+            await ble.connect();
+            paintStatus();
+            toast('连接成功');
+            const services = await ble.explore();
+            renderServices(services);
+            await ble.findWritable(services);
+            // 自动订阅最佳候选
+            const cands = ble.pickCandidates(services);
+            if (cands[0]) {
+              try {
+                await ble.subscribe({ serviceUuid: cands[0].service, characteristicUuid: cands[0].characteristic });
+                probe.setChannel(cands[0]);
+                probe.primeBaseline();
+                // 主动读一次当前值把基线固定住：
+                // 否则设备只在按键时通知的话，用户按的第一下会被当成基准丢掉，
+                // 表现就是「按了一下但数没变」。
+                await ble.readCurrentValue();
+                toast(`已自动订阅 ${shortUuid(cands[0].characteristic)}，按一下设备试试`);
+              } catch (err) {
+                toast('自动订阅失败，请手动选择通道');
+              }
+            }
+            paintStatus();
+          } catch (err) {
+            // 用户取消：静默返回，不要弹窗吓人
+            if (err?.name === 'NotFoundError' && !err.explain) return;
+            const ex = err?.explain || explainBleError(err, ENV);
+            showBleError(ex);
+          }
+        });
+
+        discoverBtn.addEventListener('click', async () => {
+          try {
+            const services = await ble.explore();
+            renderServices(services);
+            await ble.findWritable(services);
+            autoSubBtn.disabled = false;
+          } catch (err) { showBleError(err?.explain || explainBleError(err, ENV)); }
+        });
+
+        autoSubBtn.addEventListener('click', async () => {
+          const cands = ble.pickCandidates(ble.state.services);
+          if (!cands[0]) { toast('没有找到可通知的特征'); return; }
+          try {
+            await ble.subscribe({ serviceUuid: cands[0].service, characteristicUuid: cands[0].characteristic });
+            probe.setChannel(cands[0]);
+            toast('已订阅');
+          } catch (err) { showBleError(err?.explain || explainBleError(err, ENV)); }
+        });
+
+        const offLog = on('ble:log', ({ level, msg }) => {
+          const stamp = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+          const line = `${stamp}  ${msg}`;
+          if (logBox.textContent === '(等待连接)') logBox.textContent = '';
+          logBox.textContent += `${logBox.textContent ? line + '\n' : ''}`.slice(0, 3000) + (logBox.textContent.endsWith('\n') ? '' : '\n');
+        });
+
+        /* ---------------- 错误面板 ---------------- */
+        // 用页面内的卡片替代 alert()：alert 在桌面上会把整个浏览器挡住，
+        // 而这里的建议往往需要用户边看边去系统设置里改，弹窗一关就忘了。
+        const errBox = h('div', { class: 'card stack', id: 'bleError', hidden: true });
+
+        function showBleError(ex) {
+          clear(errBox);
+          errBox.hidden = false;
+          errBox.append(
+            h('div', { class: 'row' },
+              h('h2', { class: 'grow' }, '连接没成功'),
+              h('button', {
+                class: 'small',
+                onclick: () => { errBox.hidden = true; clear(errBox); },
+              }, '知道了'),
+            ),
+            h('div', { class: 'note warn' }, h('b', null, ex.title)),
+            ex.detail ? h('p', { style: { margin: 0 } }, ex.detail) : null,
+            ex.steps?.length ? h('ol', { class: 'steps' }, ...ex.steps.map((s) => h('li', null, s))) : null,
+          );
+          errBox.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        }
+
+        /* ---------------- 虚拟计数器 ---------------- */
+        const sim = ctx.sim;
+        const simSelect = h('select', {},
+          h('option', { value: 'gencounter' }, 'GenCounter v1（标准 0xA5 帧）'),
+          h('option', { value: 'u16le' }, '私有格式：0x7E 头 + uint16 小端 + 填充'),
+          h('option', { value: 'u16be' }, '私有格式：0x5A 头 + uint16 大端'),
+          h('option', { value: 'u8' }, '私有格式：0x11 头 + uint8'),
+        );
+        simSelect.value = sim.state.preset;
+        simSelect.addEventListener('change', () => sim.setPreset(simSelect.value));
+
+        const simStatus = h('div', { class: 'muted', style: { fontSize: '.82rem' } }, '');
+
+        const paintSim = () => {
+          simStatus.textContent = `设备内部计数：${sim.state.count} · 预设：${sim.state.preset} · ${sim.state.running ? '正在自动计数' : '空闲'}`;
+        };
+
+        const simCard = h('div', { class: 'card stack' },
+          h('h2', null, '虚拟计数器（无需硬件）'),
+          h('p', { class: 'muted', style: { fontSize: '.82rem', margin: 0 } },
+            '没有计数器、或在电脑上想先跑通流程？用这个模拟器。它产生真实的字节流，'
+            + '会经过和蓝牙完全相同的解析、学习、计数管线，可以验证协议是否自洽。'),
+          h('div', null, h('label', { class: 'field' }, '模拟的设备协议'), simSelect),
+          h('div', { class: 'hero-actions' },
+            h('button', { class: 'primary', onclick: () => { sim.tap(1); paintSim(); } }, '按 1 下'),
+            h('button', { onclick: () => { sim.tap(10); paintSim(); } }, '按 10 下'),
+            h('button', {
+              onclick: () => { sim.state.running ? sim.stop() : sim.start(700); paintSim(); },
+            }, sim.state.running ? '停止' : '自动连按'),
+          ),
+          simStatus,
+        );
+        paintSim();
+
+        /* ---------------- NFC（可选） ---------------- */
+        const nfcBox = h('div', { class: 'card stack' },
+          h('h2', null, 'NFC 标签（可选）'),
+          h('p', { class: 'muted', style: { fontSize: '.82rem', margin: 0 } },
+            nfcSupported()
+              ? '把功课名字写到 NFC 标签贴纸，碰一下手机就自动切到对应功课。'
+              : '当前设备/浏览器不支持 NFC 读写。Android Chrome 可用，iOS 不行。'),
+          nfcSupported() ? h('div', { class: 'row' },
+            h('button', {
+              class: 'block', onclick: async () => {
+                const p = getActivePractice();
+                try {
+                  await writeTag({ url: practiceDeepLink(p.id), text: p.name });
+                  toast('已写入标签');
+                } catch (err) { alert('写入失败：' + err.message); }
+              },
+            }, '把当前功课写入标签'),
+            h('button', {
+              class: 'block', onclick: async () => {
+                try {
+                  await startNfc((tag) => {
+                    const found = getPractice(tag.practiceId);
+                    if (found) { toast(`切换到《${found.name}》`); ctx.setPractice(found.id); }
+                    else toast('标签未绑定功课');
+                  }, (e) => alert(e.message));
+                  toast('监听中，请碰一下标签');
+                } catch (err) { alert(err.message); }
+              },
+            }, '监听标签'),
+          ) : null,
+        );
+
+        // 注意：这里必须用 h() 包一层，不能用 root.append(...)。
+        // 原生 append() 会把 null 当成字符串 "null" 渲染成一个文本节点（h() 才会跳过），
+        // 之前 renderDesktopTips 返回 null 时页面上就凭空多了一行 "null"。
+        root.append(h('div', { class: 'device-extra' },
+          errBox,
+          renderDesktopTips(ENV),
+          h('h2', { style: { margin: '18px 0 8px' } }, '服务与特征'),
+          h('div', { class: 'card stack' }, h('p', { class: 'muted', style: { fontSize: '.82rem', margin: 0 } }, '连接后自动扫描。可以手动订阅任意可通知特征。'), svcList),
+          rawCard,
+          learnCard,
+          protoCard,
+          simCard,
+          nfcBox,
+          h('details', { class: 'acc', style: { marginTop: '12px' } },
+            h('summary', null, '连接日志'),
+            h('div', { class: 'acc-body' }, logBox)),
+        ));
+
+        paintStatus();
+        renderServices(ble.state.services.length ? ble.state.services : null);
+
+        const onState = () => paintStatus();
+        document.addEventListener('ble-state', onState);
+
+        ctx.onCleanup(() => {
+          offFrame();
+          offLog();
+          offApplied();
+          offResync();
+          offBaseline();
+          offCompensate();
+          offSync();
+          offDisc();
+          offConn();
+          // 定时器必须清掉：页面切走后它还在跑就会一直引用已卸载的 DOM，白耗电
+          clearInterval(diagTimer);
+          document.removeEventListener('ble-state', onState);
+        });
+      }
+
+      Object.assign(__m, { renderDevice });
+
+    }).call(undefined);
+  };
+
+  __defs["src/ui/page-settings.js"] = function (__m) {
+    (function () {
+      /**
+       * 页面：设置
+       * 功课管理 / 提醒与提示 / 显示 / 数据与隐私。
+       */
+      const { h, clear, toast } = __import("src/ui/dom.js");
+      const { getPractices, getAllPractices, addPractice, updatePractice, archivePractice, restorePractice, movePractice, getSettings, updateSettings } = __import("src/lib/model.js");
+      const { formatNumber } = __import("src/lib/progress.js");
+      const { on } = __import("src/lib/bus.js");
+      function renderSettings(root, ctx) {
+        const box = h('div', { class: 'stack' });
+        root.append(box);
+
+        const toggle = (label, desc, key, onChange) => h('div', { class: 'switch-row' },
+          h('div', { class: 'grow' }, h('div', { class: 'lbl' }, label), desc ? h('div', { class: 'desc' }, desc) : null),
+          h('label', { class: 'switch' },
+            h('input', {
+              type: 'checkbox', checked: getSettings()[key], onchange: (e) => { updateSettings({ [key]: e.target.checked }); onChange?.(e.target.checked); },
+            }),
+            h('span')),
+        );
+
+        function paint() {
+          clear(box);
+
+          /* ---------- 功课管理 ---------- */
+          const list = h('div', { class: 'list' });
+          const practices = getPractices();
+          for (const p of practices) {
+            list.append(h('div', { class: 'list-item' },
+              h('div', { class: 'grow', style: { cursor: 'pointer' }, onclick: () => editPractice(p) },
+                h('div', { class: 't' }, `${p.name}`),
+                h('div', { class: 'd' }, `目标 ${formatNumber(p.goal)} ${p.unit} · 每点 +${p.step}`)),
+              h('button', { class: 'small ghost', title: '上移', onclick: () => { movePractice(p.id, -1); paint(); } }, '↑'),
+              h('button', { class: 'small ghost', title: '下移', onclick: () => { movePractice(p.id, 1); paint(); } }, '↓'),
+            ));
+          }
+
+          box.append(h('div', { class: 'card stack' },
+            h('div', { class: 'row' }, h('h2', { class: 'grow', style: { margin: 0 } }, '我的功课'), h('span', { class: 'chip' }, `${practices.length} 门`)),
+            list,
+            h('button', { class: 'block primary', onclick: () => editPractice(null) }, '＋ 新增功课'),
+            h('button', { class: 'block ghost small', onclick: () => showArchived() }, '查看已归档功课'),
+          ));
+
+          /* ---------- 交互 ---------- */
+          box.append(h('div', { class: 'card' },
+            h('h2', null, '手感与提示'),
+            toggle('点击音效', '每计一次播放一声木鱼，用 WebAudio 现场合成，不下载音频', 'sound'),
+            h('div', { class: 'switch-row' },
+              h('div', { class: 'grow' }, h('div', { class: 'lbl' }, '音量'),
+                h('div', { class: 'desc' }, `当前 ${Math.round((getSettings().soundVolume || 0) * 100)}%`)),
+              h('input', {
+                type: 'range', min: '0', max: '1', step: '0.05', value: String(getSettings().soundVolume ?? 0.6),
+                style: { width: '120px' },
+                oninput: (e) => updateSettings({ soundVolume: Number(e.target.value) }),
+              }),
+            ),
+            toggle('振动反馈', '支持的手机才会振动', 'vibration'),
+            toggle('目标达成自动顺延', '完成一轮后目标翻到下一轮，适合「今日不设上限」', 'dailyGoalAutoExtend'),
+          ));
+
+          /* ---------- 显示 ---------- */
+          box.append(h('div', { class: 'card' },
+            h('h2', null, '屏幕'),
+            toggle('保持屏幕常亮', '念到一半息屏很麻烦；部分浏览器需再次点击页面才生效', 'keepScreenOn'),
+            h('div', { class: 'note info', style: { marginTop: '12px' } },
+              '提示：把本页「添加到主屏幕」，用起来更像原生 App，且离线可用。'),
+          ));
+
+          /* ---------- 设备 ---------- */
+          box.append(h('div', { class: 'card stack' },
+            h('h2', null, '设备筛选'),
+            h('p', { class: 'muted', style: { fontSize: '.82rem', margin: 0 } },
+              '如果附近蓝牙设备太多，可以用名称前缀过滤（例如填 DB）。留空则显示全部。'),
+            h('div', null, h('label', { class: 'field' }, '设备名前缀'),
+              h('input', {
+                type: 'text', value: getSettings().deviceFilterPrefix || '', placeholder: '例如：DB、NFO、Mala',
+                onchange: (e) => updateSettings({ deviceFilterPrefix: e.target.value.trim() }),
+              })),
+            h('div', null, h('label', { class: 'field' }, '服务 UUID（高级，一般留空）'),
+              h('input', {
+                type: 'text', value: getSettings().deviceFilterService || '', placeholder: '例如：0000fff0-0000-1000-8000-00805f9b34fb',
+                onchange: (e) => updateSettings({ deviceFilterService: e.target.value.trim() }),
+              })),
+          ));
+
+          /* ---------- 数据 ---------- */
+          const fileInput = h('input', {
+            type: 'file', accept: 'application/json,.json', style: { display: 'none' },
+            onchange: async (e) => {
+              const f = e.target.files?.[0];
+              if (!f) return;
+              try {
+                const summary = await ctx.importFile(f);
+                toast(`已导入：${summary.logs} 条日记录、${summary.practices} 门功课`);
+                paint();
+              } catch (err) {
+                alert('导入失败：' + err.message);
+              }
+              e.target.value = '';
+            },
+          });
+
+          box.append(h('div', { class: 'card stack' },
+            h('h2', null, '数据与隐私'),
+            h('div', { class: 'note info' },
+              '本应用没有服务器、没有账号、没有统计代码。所有数据存在这台设备的浏览器里（localStorage）。'
+              + '清除浏览器数据 / 卸载浏览器会丢失，所以请定期导出备份。'),
+            h('div', { class: 'row' },
+              h('button', { class: 'block', onclick: () => ctx.backup() }, '导出备份'),
+              h('button', { class: 'block', onclick: () => fileInput.click() }, '导入备份'),
+            ),
+            h('button', { class: 'block ghost', onclick: () => ctx.exportCsv() }, '导出 CSV（给 Excel 看）'),
+            h('button', { class: 'block danger', onclick: () => ctx.wipe() }, '清空本机全部数据'),
+            fileInput,
+          ));
+
+          /* ---------- 关于入口 ---------- */
+          box.append(h('div', { class: 'card' },
+            h('p', { class: 'muted', style: { fontSize: '.84rem', margin: 0 } },
+              '开源协议 MIT。发现问题、想加自己设备的协议，欢迎提 issue / PR。'),
+          ));
+        }
+
+        function editPractice(p) {
+          const isNew = !p;
+          const draft = { name: '', unit: '遍', goal: 108, step: 1, ...(p || {}) };
+          const root2 = h('div', { class: 'modal-backdrop' });
+          const card = h('div', { class: 'modal-card' },
+            h('h2', null, isNew ? '新增功课' : `编辑「${p.name}」`),
+            h('div', { class: 'field-group' }, h('label', { class: 'field' }, '名称'),
+              h('input', { type: 'text', value: draft.name, placeholder: '例如：念佛、诵经、礼拜', oninput: (e) => { draft.name = e.target.value; } })),
+            h('div', { class: 'row' },
+              h('div', { class: 'field-group grow' }, h('label', { class: 'field' }, '单位'),
+                h('input', { type: 'text', value: draft.unit, oninput: (e) => { draft.unit = e.target.value; } })),
+              h('div', { class: 'field-group grow' }, h('label', { class: 'field' }, '每日目标'),
+                h('input', { type: 'number', min: '1', value: draft.goal, oninput: (e) => { draft.goal = Number(e.target.value) || 1; } })),
+              h('div', { class: 'field-group grow' }, h('label', { class: 'field' }, '每点 +'),
+                h('input', { type: 'number', min: '1', value: draft.step, oninput: (e) => { draft.step = Number(e.target.value) || 1; } })),
+            ),
+            h('div', { class: 'modal-actions' },
+              !isNew ? h('button', { class: 'danger', onclick: () => { archivePractice(p.id); root2.remove(); paint(); } }, '归档') : null,
+              h('button', { class: 'ghost', onclick: () => root2.remove() }, '取消'),
+              h('button', {
+                class: 'primary', onclick: () => {
+                  if (!draft.name.trim()) { alert('请填写名称'); return; }
+                  if (isNew) addPractice(draft); else updatePractice(p.id, draft);
+                  root2.remove();
+                  paint();
+                  toast('已保存');
+                },
+              }, '保存'),
+            ),
+          );
+          root2.append(card);
+          document.body.append(root2);
+        }
+
+        function showArchived() {
+          const archived = getAllPractices().filter((p) => p.archived);
+          const root2 = h('div', { class: 'modal-backdrop' });
+          const body = h('div', { class: 'stack' });
+          if (!archived.length) body.append(h('p', { class: 'muted' }, '没有已归档的功课。'));
+          for (const p of archived) {
+            body.append(h('div', { class: 'list-item' },
+              h('div', { class: 'grow' }, h('div', { class: 't' }, p.name), h('div', { class: 'd' }, `目标 ${formatNumber(p.goal)} ${p.unit}`)),
+              h('button', { class: 'small', onclick: () => { restorePractice(p.id); root2.remove(); paint(); toast('已恢复'); } }, '恢复'),
+            ));
+          }
+          root2.append(h('div', { class: 'modal-card' },
+            h('h2', null, '已归档'),
+            body,
+            h('div', { class: 'modal-actions' }, h('button', { onclick: () => root2.remove() }, '关闭'))));
+          document.body.append(root2);
+        }
+
+        paint();
+        const off = on('practices:changed', () => paint());
+        ctx.onCleanup(off);
+      }
+
+      Object.assign(__m, { renderSettings });
+
+    }).call(undefined);
+  };
+
+  __defs["src/ui/page-about.js"] = function (__m) {
+    (function () {
+      /**
+       * 页面：说明
+       *
+       * 这一页比代码更重要。用户来这里的真实问题是：
+       *  「原厂 APP 停了，我的计数器还能不能用？我的数据还在吗？这东西可靠吗？」
+       * 所以先说结论，再说原理，最后说免责与参与方式。
+       */
+      const { h } = __import("src/ui/dom.js");
+      const { APP_VERSION } = __import("src/lib/version.js");
+      /** 平台能力对照表：一句话回答「我这台设备到底行不行」 */
+      const PLATFORM_TABLE = [
+        ['Android 手机', 'Chrome / Edge 111+', '可连', 'ok', '最省事的路子，推荐'],
+        ['Windows 10 / 11', 'Chrome / Edge', '可连', 'ok', '需蓝牙 4.0+；台式机可能要插适配器'],
+        ['macOS', 'Chrome / Edge', '可连', 'ok', '需在系统设置里允许浏览器用蓝牙；Safari 不行'],
+        ['Linux', 'Chrome', '需设置', 'warn', '要在 chrome://flags 打开实验特性；需 BlueZ 5.41+'],
+        ['ChromeOS', 'Chrome', '可连', 'ok', '开箱可用'],
+        ['iPhone / iPad', '任意浏览器', '不可连', 'err', '全部是 WebKit 内核，没有蓝牙网页接口'],
+        ['Firefox（全平台）', '—', '不可连', 'err', 'Mozilla 明确不实现该 API'],
+        ['双击打开 HTML（file://）', '—', '不可连', 'err', '改用 http://localhost 或 https 访问'],
+      ];
+
+      function renderAbout(root) {
+        root.append(
+          h('div', { class: 'card stack' },
+            h('h1', null, '大白牛车停了，计数器还能用吗？'),
+            h('p', { class: 'muted', style: { margin: 0, fontSize: '.85rem' } },
+              `当前版本 v${APP_VERSION} —— 更新后如果行为变了，先看版本号对不对，再反馈问题`),
+            h('p', null,
+              '能，至少硬件本身还能用 —— 它是个蓝牙外设，按键、计数、广播都不依赖手机 APP。'
+              + '停掉的只是「把数据读出来并存在云上」的那一层。这个开源项目补的就是那一层。'),
+            h('div', { class: 'note' },
+              h('b', null, '但要说清楚：'), '本项目的蓝牙协议是自己的公开规范（GenCounter v1）'
+              + ' + 通用自适应学习，', h('b', null, '并不是大白牛车原厂的私有协议'), '。'
+              + '如果你手上的设备只能被原 APP 读取，需要用「设备」页的自动学习功能去适配它，'
+              + '或者由有抓包条件的人把协议补充进来（欢迎提 PR）。'),
+          ),
+
+          h('div', { class: 'card stack' },
+            h('h2', null, '三步上手'),
+            h('ol', null,
+              h('li', null, '用手机 Chrome 打开本页，点「添加到主屏幕」；'),
+              h('li', null, '去「设备」页 → 选择并连接你的计数器 → 按几下实体按键，看「原始数据监视」有没有动静；'),
+              h('li', null, '有动静但计数不对 → 用「自动学习」按 5 次，让它自己找出计数字段。'),
+            ),
+            h('p', { class: 'muted', style: { fontSize: '.84rem' } },
+              '不想折腾蓝牙也完全可以：回到「计数」页，整块屏幕就是一个计数器，声音、振动、目标进度齐全。'),
+          ),
+
+          h('div', { class: 'card stack' },
+            h('h2', null, '为什么是「网页」而不是又一个 APP？'),
+            h('p', null, '原 APP 停运这件事本身就是答案：闭源 APP 的寿命由厂商决定，而你的修行记录要跟你几十年。所以这次刻意选最不容易死的技术栈：'),
+            h('ul', null,
+              h('li', null, h('b', null, '零后端'), '：没有服务器可关停，没有域名可过期，没有账号可注销；'),
+              h('li', null, h('b', null, '零依赖'), '：不引入框架与第三方库，5000 行以内，任何人都能在本地跑起来；'),
+              h('li', null, h('b', null, '零收集'), '：不联网上报、无埋点、无广告，代码就是全部行为；'),
+              h('li', null, h('b', null, '数据可携带'), '：一键导出 JSON / CSV，格式公开，随时搬到别处。'),
+            ),
+            h('p', { class: 'muted', style: { fontSize: '.84rem' } },
+              '代价也坦白：iOS 上的浏览器不支持 Web Bluetooth，只能当纯手机计数器用；换浏览器/清缓存需要先备份。'),
+          ),
+
+          h('div', { class: 'card stack' },
+            h('h2', null, '电脑能用吗？'),
+            h('p', null,
+              '能，但只有 Chrome / Edge 内核的浏览器可以，而且必须通过 https 或 localhost 打开。'
+              + '这也是「为什么双击 HTML 文件连不上蓝牙」的答案——双击时地址栏是 file://，'
+              + '浏览器把它当不安全的本地文件，蓝牙接口直接不给。'),
+            h('div', { class: 'table-wrap' },
+              h('table', { class: 'tbl' },
+                h('thead', null, h('tr', null,
+                  h('th', null, '设备 / 方式'), h('th', null, '浏览器'), h('th', null, '蓝牙'), h('th', null, '说明'))),
+                h('tbody', null, ...PLATFORM_TABLE.map(([plat, br, verdict, tone, note]) => h('tr', null,
+                  h('td', null, plat),
+                  h('td', null, br),
+                  h('td', null, h('span', { class: `pill ${tone}` }, verdict)),
+                  h('td', { class: 'muted' }, note),
+                ))),
+              ),
+            ),
+            h('p', { class: 'muted', style: { fontSize: '.82rem' } },
+              '电脑上连计数器的两个真实坑：① 手机还开着原厂 APP 时，BLE 设备被占用，电脑连上但收不到数据；'
+              + '② 切到别的标签页，浏览器的定时器和声音会被降频（计数不会丢，走的是绝对计数补差）。'),
+            h('p', { class: 'muted', style: { fontSize: '.82rem' } },
+              '想知道自己这台机器现在是什么状态？去「设备」页，最上面那张卡片会直接告诉你缺哪一步。'),
+          ),
+
+          h('div', { class: 'card stack' },
+            h('h2', null, '隐私'),
+            h('p', null,
+              '本页不发送任何请求。你可以打开开发者工具的 Network 面板验证：除了首次加载自身文件，没有任何外部请求。'
+              + '计数、功课、时长全部存在浏览器 localStorage 里。'),
+            h('p', { class: 'muted', style: { fontSize: '.84rem' } },
+              '唯一例外：连接蓝牙时浏览器会显示系统级设备选择框，这是操作系统行为，数据不出设备。'),
+          ),
+
+          h('div', { class: 'card stack' },
+            h('h2', null, '数据安全提醒'),
+            h('p', null,
+              '修行记录是「长期账本」，最怕的不是泄露，而是丢失。建议：每月导出一次备份，存到自己的网盘或发给自己的邮箱；'
+              + '换手机前务必先导出。'),
+          ),
+
+          h('div', { class: 'card stack' },
+            h('h2', null, '许可与致谢'),
+            h('p', null, '代码以 MIT 协议开源，可自由使用、修改、再发布；不提供任何担保。'),
+            h('p', { class: 'muted', style: { fontSize: '.84rem' } },
+              '本项目与深圳市大白牛车文化传播有限公司无任何关联，未使用其商标、代码或数据。'
+              + '「大白牛车」一词出自《法华经》譬喻品，在此仅用于说明用户的实际处境。'),
+          ),
+        );
+      }
+
+      Object.assign(__m, { renderAbout });
+
+    }).call(undefined);
+  };
+
+  __defs["src/main.js"] = function (__m) {
+    (function () {
+      /**
+       * 应用入口：装配 BLE / 引擎 / 解析器 / 页面路由。
+       */
+      const { h, $, clear, toast } = __import("src/ui/dom.js");
+      const { on, emit, bus } = __import("src/lib/bus.js");
+      const { APP_VERSION } = __import("src/lib/version.js");
+      const { createBle, SUPPORTED } = __import("src/lib/ble.js");
+      const { createProbe } = __import("src/lib/probe.js");
+      const { createEngine } = __import("src/lib/engine.js");
+      const { setActivePractice, getPractice, getSettings, getAllPractices, getLogs, findPracticeByNfc } = __import("src/lib/model.js");
+      const { startScan: startNfcScan, nfcSupported } = __import("src/lib/nfc.js");
+      const { read, write } = __import("src/lib/store.js");
+      const { backupNow, doImport, wipe } = __import("src/ui/device-sdk.js");
+      const { createSimulator } = __import("src/ui/simulator.js");
+      const { renderHome } = __import("src/ui/page-home.js");
+      const { renderStats } = __import("src/ui/page-stats.js");
+      const { renderDevice } = __import("src/ui/page-device.js");
+      const { renderSettings } = __import("src/ui/page-settings.js");
+      const { renderAbout } = __import("src/ui/page-about.js");
+      /* ---------------- 单例 ---------------- */
+      const engine = createEngine();
+
+      const ble = createBle({
+        onFrame: (f) => probe.handleFrame(f),
+        onLog: () => {},
+      });
+
+      const simulator = createSimulator({
+        onFrame: (f) => probe.handleFrame(f),
+        onLog: (e) => emit('ble:log', e),
+      });
+
+      const savedProbe = read('probe', {});
+      const probe = createProbe({ ble, engine, persist: savedProbe });
+      let saveTimer = 0;
+      on('probe:config', () => {
+        clearTimeout(saveTimer);
+        saveTimer = setTimeout(() => write('probe', probe.cfg), 300);
+      });
+
+      /* ---------------- 路由 ---------------- */
+      const PAGES = {
+        home: renderHome,
+        stats: renderStats,
+        device: renderDevice,
+        settings: renderSettings,
+        about: renderAbout,
+      };
+
+      const app = $('#app');
+      const boot = $('#boot');
+      let current = null;
+      let cleanups = [];
+
+      const ctx = {
+        ble,
+        engine,
+        probe,
+        sim: simulator,
+        go(tab) { location.hash = `#/${tab}`; },
+        rerender() { mount(current, true); },
+        setPractice(id) { setActivePractice(id); location.hash = '#/home'; },
+        onCleanup(fn) { cleanups.push(fn); },
+        bleDelta: () => engine.state.bleTotal,
+        backup: backupNow,
+        wipe,
+        async importFile(file) {
+          const summary = await doImport(file, { merge: true });
+          return summary;
+        },
+        exportCsv,
+      };
+
+      function exportCsv() {
+        const names = new Map(getAllPractices().map((p) => [p.id, p.name]));
+        const rows = [['日期', '功课', '计数', '时长(秒)', '完成轮数']];
+        for (const l of [...getLogs()].sort((a, b) => (a.date < b.date ? -1 : 1))) {
+          rows.push([l.date, names.get(l.practiceId) || '已归档', l.count || 0, l.seconds || 0, l.sessions || 0]);
+        }
+        const csv = rows.map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\r\n');
+        const blob = new Blob([`\ufeff${csv}`], { type: 'text/csv;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = h('a', { href: url, download: `修行记录-${new Date().toISOString().slice(0, 10)}.csv` });
+        document.body.append(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 3000);
+        toast('已导出 CSV');
+      }
+
+      function parseHash() {
+        const m = /^#\/(\w+)/.exec(location.hash || '');
+        return m && PAGES[m[1]] ? m[1] : 'home';
+      }
+
+      function mount(tab, force = false) {
+        if (!force && tab === current) return;
+        for (const fn of cleanups) { try { fn(); } catch { /* 忽略 */ } }
+        cleanups = [];
+        clear(app);
+        current = tab;
+        PAGES[tab](app, ctx);
+        for (const b of document.querySelectorAll('#tabbar button')) {
+          if (b.dataset.tab === tab) b.setAttribute('aria-current', 'page');
+          else b.removeAttribute('aria-current');
+        }
+        window.scrollTo({ top: 0 });
+      }
+
+      function route() {
+        mount(parseHash());
+      }
+
+      window.addEventListener('hashchange', route);
+      $('#tabbar').addEventListener('click', (e) => {
+        const b = e.target.closest('button[data-tab]');
+        if (b) ctx.go(b.dataset.tab);
+      });
+
+      /* ---------------- 顶部蓝牙状态 ---------------- */
+      function paintPill(state) {
+        const pill = document.getElementById('blePill');
+        if (!pill) return;
+        const s = state || ble.state;
+        if (s.connected) {
+          pill.className = 'pill ok';
+          pill.innerHTML = '<span class="dot"></span><span>已连接</span>';
+        } else {
+          pill.className = 'pill';
+          pill.innerHTML = '<span class="dot"></span><span>未连接</span>';
+        }
+      }
+
+      on('ble:connected', () => { paintPill(); document.dispatchEvent(new Event('ble-state')); });
+      on('ble:disconnected', () => { paintPill(); document.dispatchEvent(new Event('ble-state')); });
+
+      /* ---------------- 屏幕常亮 ---------------- */
+      let wakeLock = null;
+      async function requestWakeLock() {
+        if (!getSettings().keepScreenOn) return;
+        if (!('wakeLock' in navigator)) return;
+        try {
+          wakeLock = await navigator.wakeLock.request('screen');
+          wakeLock.addEventListener('release', () => { wakeLock = null; });
+        } catch { /* 用户拒绝或省电模式 */ }
+      }document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible' && !wakeLock) requestWakeLock();
+      });
+      document.addEventListener('click', () => { if (!wakeLock) requestWakeLock(); }, { once: true });
+
+      /* ---------------- NFC 深链 ---------------- */
+      (function handleDeepLink() {
+        const sp = new URLSearchParams(location.search);
+        const pid = sp.get('practice');
+        if (pid && getPractice(pid)) setActivePractice(pid);
+        // 清理 URL，避免刷新后又被跳
+        if (pid) {
+          sp.delete('practice');
+          const q = sp.toString();
+          history.replaceState(null, '', `${location.pathname}${q ? '?' + q : ''}${location.hash}`);
+        }
+      })();
+
+      /* ---------------- 启动 ---------------- */
+      boot?.remove();
+      paintPill();
+      // 标题栏带上版本号：exe / 网页双开时一眼分清哪个窗口是哪个版本
+      document.title = `念佛计数器 v${APP_VERSION}`;
+      mount(parseHash());
+
+      // 首次使用引导（轻量，不打断）
+      if (!localStorage.getItem('onc.onboarded')) {
+        localStorage.setItem('onc.onboarded', '1');
+        setTimeout(() => {
+          toast(SUPPORTED ? '点屏幕任意位置即可计数 · 右侧「设备」可连蓝牙' : '已就绪：点屏幕即可计数（当前浏览器不支持蓝牙）', 4200);
+        }, 600);
+      }
+
+      // 暴露给调试台（只读为主），方便用户自己排查。
+      // bus 也放进来：出问题时可以在控制台直接 on('ble:frame', ...) 看每一帧原始字节，
+      // 这比截图问「为什么不动」快得多。
+      window.__onc = { engine, ble, probe, sim: simulator, ctx, bus, on, emit };
+
+      Object.assign(__m, { engine: engine, ble: ble, probe: probe, ctx: ctx });
+    }).call(undefined);
+  };
+  __import("src/main.js");
+})();
+
+</script>
+</body>
+</html>
