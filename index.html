@@ -603,7 +603,7 @@ details.acc .acc-body { padding-bottom: 12px; }
   </div>
 
   <script>
-/* open-nianfo-counter — built 2026-10-31T12:41:51.185Z */
+/* open-nianfo-counter — built 2026-10-31T14:03:05.807Z */
 (function () {
   'use strict';
   var __defs = {};
@@ -722,7 +722,7 @@ details.acc .acc-body { padding-bottom: 12px; }
        * 发布新版本时这里和 package.json 要同步改（tests/version.test.js 会校验两者一致），
        * 界面上（标题栏、说明页）都会带上它，免得用户手里的 exe 究竟是哪个版本搞不清。
        */
-      const APP_VERSION = '0.3.5';
+      const APP_VERSION = '0.3.6';
 
       Object.assign(__m, { APP_VERSION });
 
@@ -1684,6 +1684,66 @@ details.acc .acc-body { padding-bottom: 12px; }
       }
 
       /**
+       * 功课名归一化，用于「同名合并」的比较。
+       *
+       * 为什么不能只用 trim()：中文输入法和复制粘贴会带进各种不可见字符，
+       * 肉眼完全看不出区别，但字符串比较就是不相等的：
+       *   · 零宽空格 U+200B / 零宽连接符 U+200D
+       *   · 不换行空格 U+00A0、各种宽度空格 U+2000-U+200A
+       *   · 全角空格 U+3000（trim 能去掉）
+       *   · BOM U+FEFF
+       * 实测 trim() 去不掉 U+200B —— 这正是「同名功课没合并」的元凶。
+       *
+       * 另外统一全角/半角括号与大小写，避免「功课(一)」和「功课（一）」被当成两门。
+       */
+      function normalizePracticeName(name) {
+        return String(name || '')
+          // 所有空白与零宽字符
+          .replace(/[\s\u00a0\u1680\u2000-\u200f\u2028\u2029\u202f\u205f\u3000\ufeff]/g, '')
+          // 全角括号转半角
+          .replace(/（/g, '(').replace(/）/g, ')')
+          // 全角字母数字转半角
+          .replace(/[Ａ-Ｚａ-ｚ０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0))
+          .toLowerCase();
+      }
+
+      /**
+       * 合并两批功课：同名（归一化后）合并为一条，保留本机那条的 id。
+       * 返回 { list, remap }，remap 是 远端 id → 本机 id 的映射。
+       *
+       * 抽成独立函数，是为了让「同步导入」和「一键去重」共用同一套规则，
+       * 避免两处逻辑漂移后出现「导入能合并、去重不能」这种怪事。
+       */
+      function mergePractices(local, incoming) {
+        const byId = new Map(local.map((p) => [p.id, { ...p }]));
+        const byName = new Map();
+        for (const p of local) {
+          const key = normalizePracticeName(p.name);
+          if (!byName.has(key)) byName.set(key, p.id);
+        }
+
+        const remap = new Map();
+        let merged = 0;
+
+        for (const p of incoming || []) {
+          const cur = byId.get(p.id);
+          const key = normalizePracticeName(p.name);
+          const twinId = cur ? cur.id : byName.get(key);
+          const target = twinId ? byId.get(twinId) : null;
+          const targetId = target ? target.id : p.id;
+
+          byId.set(targetId, { ...(target || p), ...p, id: targetId });
+          if (p.id !== targetId) {
+            remap.set(p.id, targetId);
+            merged++;
+          }
+          if (!byName.has(key)) byName.set(key, targetId);
+        }
+
+        return { list: [...byId.values()], remap, merged, count: (incoming || []).length };
+      }
+
+      /**
        * 导入备份。merge=true 时对日记录/事件做合并（同一 id 以导入的为准）；
        * 功课除按 id 合并外，还会按名称合并——两端各自创建的同名功课视作同一门，
        * 计数记录自动归到本机那条功课下。merge=false 时整体覆盖。返回导入摘要。
@@ -1709,25 +1769,14 @@ details.acc .acc-body { padding-bottom: 12px; }
           for (const [name, v] of keep) localStorage.setItem(key(name), v);
         }
 
-        // 功课列表：按 id 合并；同名（忽略首尾空格）并入本机同名功课，保留本机 id
+        // 功课列表：按 id 合并；同名（归一化后）并入本机同名功课，保留本机 id
         if (Array.isArray(incoming.practices)) {
           const local = read('practices', []);
-          const byId = new Map(local.map((p) => [p.id, { ...p }]));
-          const byName = new Map(local.map((p) => [String(p.name).trim(), p.id]));
-          for (const p of incoming.practices) {
-            const cur = byId.get(p.id);
-            const twinId = cur ? cur.id : byName.get(String(p.name || '').trim());
-            const target = twinId ? byId.get(twinId) : null;
-            const targetId = target ? target.id : p.id;
-            byId.set(targetId, { ...(target || p), ...p, id: targetId });
-            if (p.id !== targetId) {
-              idRemap.set(p.id, targetId);
-              summary.merged++;
-            }
-            byName.set(String(p.name || '').trim(), targetId);
-            summary.practices++;
-          }
-          write('practices', [...byId.values()]);
+          const r = mergePractices(local, incoming.practices);
+          write('practices', r.list);
+          for (const [from, to] of r.remap) idRemap.set(from, to);
+          summary.practices = r.count;
+          summary.merged = (summary.merged || 0) + r.merged;
         }
 
         // 设置：覆盖（当前功课 id 若被同名合并，需改写映射后的 id）
@@ -1792,7 +1841,7 @@ details.acc .acc-body { padding-bottom: 12px; }
         }
       }
 
-      Object.assign(__m, { SCHEMA_VERSION, read, write, remove, listKeys, usageBytes, exportAll, importAll, clearAll });
+      Object.assign(__m, { SCHEMA_VERSION, read, write, remove, listKeys, usageBytes, exportAll, normalizePracticeName, mergePractices, importAll, clearAll });
 
     }).call(undefined);
   };
@@ -2026,7 +2075,7 @@ details.acc .acc-body { padding-bottom: 12px; }
        * 这里是整个应用唯一的「真相」。UI 层只调用这里暴露的函数，不直接碰 storage。
        * 每次变更后触发 bus 事件，UI 自行订阅重绘。
        */
-      const { read, write } = __import("src/lib/store.js");
+      const { read, write, normalizePracticeName } = __import("src/lib/store.js");
       const { dayKey, nowMs } = __import("src/lib/time.js");
       const { emit } = __import("src/lib/bus.js");
       const { repairLogs, scanLogs } = __import("src/lib/repair.js");
@@ -2255,6 +2304,108 @@ details.acc .acc-body { padding-bottom: 12px; }
         return s.practices[i];
       }
 
+      /**
+       * 扫描同名功课（归一化后同名视为重复）。
+       * 只读，用于界面预览「检测到几组重复、每组哪几条」。
+       */
+      function scanDuplicatePractices() {
+        // 只看「还在使用」的功课：已归档的不参与判断，
+        // 否则合并之后被归档那条仍会被扫出来，界面会显示「还有重复」。
+        const all = ensureCache().practices.filter((p) => !p.archived);
+        const groups = new Map();
+        for (const p of all) {
+          const key = normalizePracticeName(p.name);
+          if (!groups.has(key)) groups.set(key, []);
+          groups.get(key).push(p);
+        }
+        return [...groups.entries()]
+          .filter(([, list]) => list.length > 1)
+          .map(([key, list]) => ({ key, practices: list }));
+      }
+
+      /**
+       * 一键合并同名功课。
+       *
+       * 合并策略（保守优先，宁可留错也不删数据）：
+       *   · 每组保留「计数记录最多」的那一条（通常是主用的），其余归档；
+       *   · 把被归档那几条的日记录、会话，全部改挂到保留的那条上；
+       *   · 同一天两边都有记录时累加（这正是用户想要的：手机 + 电脑 = 总数）；
+       *   · 不物理删除任何功课，被合并的只是「归档」，随时可在设置里恢复。
+       */
+      function mergeDuplicatePractices() {
+        const s = ensureCache();
+        const groups = scanDuplicatePractices();
+        if (!groups.length) return { merged: 0, groups: 0, logs: 0 };
+
+        let mergedCount = 0;
+        let logsMoved = 0;
+
+        for (const g of groups) {
+          // 谁的记录多就留谁；记录数相同则留「名字更干净」的（更短），再相同留较早创建的
+          const scored = g.practices.map((p) => ({
+            p,
+            n: s.logs.filter((l) => l.practiceId === p.id).length,
+            nameLen: String(p.name || '').length,
+          }));
+          scored.sort((a, b) => b.n - a.n || a.nameLen - b.nameLen || (a.p.createdAt || 0) - (b.p.createdAt || 0));
+          const keep = scored[0].p;
+          const drop = scored.slice(1).map((x) => x.p);
+
+          for (const d of drop) {
+            // 1) 日记录改挂 + 同日累加
+            for (const log of s.logs.filter((l) => l.practiceId === d.id)) {
+              const exists = s.logs.find((l) => l.practiceId === keep.id && l.date === log.date);
+              if (exists) {
+                exists.count = (exists.count || 0) + (log.count || 0);
+                exists.total = (exists.total || 0) + (log.total || 0);
+                exists.seconds = (exists.seconds || 0) + (log.seconds || 0);
+                exists.sessions = (exists.sessions || 0) + (log.sessions || 0);
+                exists.updatedAt = nowMs();
+                s.logs = s.logs.filter((l) => l !== log);
+              } else {
+                log.practiceId = keep.id;
+              }
+              logsMoved++;
+            }
+            // 2) 会话改挂
+            for (const sess of s.sessions) {
+              if (sess.practiceId === d.id) sess.practiceId = keep.id;
+            }
+            // 3) 归档而非删除
+            d.archived = true;
+            mergedCount++;
+          }
+
+          /* 4) 保留那条的名字统一成「干净」写法。
+           *    否则保留的可能是带零宽字符的那条（比如 id 后建的先被留下），
+           *    界面上看着和另一条一模一样，用户会以为没合并成功。
+           *    取组内最短的名字（通常就是没杂质的那个）作为标准写法。
+           */
+          const cleanName = g.practices
+            .map((p) => String(p.name || '').trim())
+            .sort((a, b) => a.length - b.length)[0];
+          if (cleanName && keep.name !== cleanName && normalizePracticeName(keep.name) === normalizePracticeName(cleanName)) {
+            keep.name = cleanName;
+          }
+        }
+
+        write('logs', s.logs);
+        write('sessions', s.sessions);
+        write('practices', s.practices);
+
+        // 当前功课若被归档，切到保留的那条
+        const active = s.settings.activePracticeId;
+        if (active && !s.practices.find((p) => p.id === active && !p.archived)) {
+          const first = s.practices.find((p) => !p.archived);
+          if (first) s.settings.activePracticeId = first.id;
+          write('settings', s.settings);
+        }
+
+        emit('practices:changed', s.practices);
+        emit('logs:changed', s.logs);
+        return { merged: mergedCount, groups: groups.length, logs: logsMoved };
+      }
+
       /** 归档而非物理删除：历史记录仍可查阅、可撤销 */
       function archivePractice(id) {
         updatePractice(id, { archived: true });
@@ -2419,7 +2570,7 @@ details.acc .acc-body { padding-bottom: 12px; }
         cache = null;
       }
 
-      Object.assign(__m, { SCHEMA, DEFAULT_SETTINGS, newId, getSettings, getPractices, getAllPractices, getLogs, getSessions, scanAnomalies, repairAnomalies, getPractice, getActivePractice, findPracticeByNfc, getLog, todayCount, updateSettings, setActivePractice, addPractice, updatePractice, archivePractice, restorePractice, movePractice, addCount, setTodayCount, recordRound, addSeconds, statsForPractice, totalsForPractice, overallTotals, pushSession, invalidateCache });
+      Object.assign(__m, { SCHEMA, DEFAULT_SETTINGS, newId, getSettings, getPractices, getAllPractices, getLogs, getSessions, scanAnomalies, repairAnomalies, getPractice, getActivePractice, findPracticeByNfc, getLog, todayCount, updateSettings, setActivePractice, addPractice, updatePractice, scanDuplicatePractices, mergeDuplicatePractices, archivePractice, restorePractice, movePractice, addCount, setTodayCount, recordRound, addSeconds, statsForPractice, totalsForPractice, overallTotals, pushSession, invalidateCache });
 
     }).call(undefined);
   };
@@ -5597,7 +5748,7 @@ details.acc .acc-body { padding-bottom: 12px; }
        * 功课管理 / 提醒与提示 / 显示 / 数据与隐私。
        */
       const { h, clear, toast } = __import("src/ui/dom.js");
-      const { getPractices, getAllPractices, addPractice, updatePractice, archivePractice, restorePractice, movePractice, getSettings, updateSettings, scanAnomalies, repairAnomalies } = __import("src/lib/model.js");
+      const { getPractices, getAllPractices, addPractice, updatePractice, archivePractice, restorePractice, movePractice, getSettings, updateSettings, scanAnomalies, repairAnomalies, scanDuplicatePractices, mergeDuplicatePractices } = __import("src/lib/model.js");
       const { formatNumber } = __import("src/lib/progress.js");
       const { on } = __import("src/lib/bus.js");
       function renderSettings(root, ctx) {
@@ -5695,6 +5846,41 @@ details.acc .acc-body { padding-bottom: 12px; }
               e.target.value = '';
             },
           });
+
+          /* ---------- 同名功课去重 ---------- */
+          // 多端同步后常见：两端各自建过同名的功课，导入时因名字里混了不可见字符
+          // 没被识别成同一门，于是在列表里并排出现两条。这里给一个显式的合并入口。
+          const dupGroups = scanDuplicatePractices();
+          const dupCard = h('div', { class: 'card stack' }, h('h2', null, '同名功课合并'));
+
+          if (!dupGroups.length) {
+            dupCard.append(h('div', { class: 'note ok' }, '没有重名的功课，一切正常。'));
+          } else {
+            const total = dupGroups.reduce((n, g) => n + g.practices.length - 1, 0);
+            dupCard.append(h('div', { class: 'note warn' },
+              `检测到 ${dupGroups.length} 组重名功课，共 ${total} 条多余。`
+              + '合并后计数记录会按日期累加，不会丢；被并掉的功课只是归档，可在「已归档」里恢复。'));
+
+            const preview = h('div', { class: 'list', style: { maxHeight: '14rem', overflowY: 'auto' } });
+            for (const g of dupGroups) {
+              preview.append(h('div', { class: 'list-item' },
+                h('div', { class: 'grow' },
+                  h('div', { class: 't' }, g.practices[0].name),
+                  h('div', { class: 'd' }, `${g.practices.length} 条同名，将合并为 1 条`)),
+              ));
+            }
+            dupCard.append(preview);
+            dupCard.append(h('button', {
+              class: 'block danger',
+              onclick: () => {
+                if (!confirm(`将合并 ${dupGroups.length} 组重名功课。\n\n计数记录按日期累加，被并掉的功课归档（可恢复）。\n建议先导出备份。确定继续？`)) return;
+                const r = mergeDuplicatePractices();
+                toast(`已合并 ${r.merged} 条功课，归并 ${r.logs} 条记录`);
+                paint();
+              },
+            }, `合并 ${dupGroups.length} 组重名功课`));
+          }
+          box.append(dupCard);
 
           /* ---------- 异常记录修复 ---------- */
           // 先只读扫描，把「检测到几条、分别是哪天、差多少」摆出来，
