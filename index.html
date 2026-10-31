@@ -603,7 +603,7 @@ details.acc .acc-body { padding-bottom: 12px; }
   </div>
 
   <script>
-/* open-nianfo-counter — built 2026-10-31T02:02:08.404Z */
+/* open-nianfo-counter — built 2026-10-31T07:23:29.310Z */
 (function () {
   'use strict';
   var __defs = {};
@@ -722,7 +722,7 @@ details.acc .acc-body { padding-bottom: 12px; }
        * 发布新版本时这里和 package.json 要同步改（tests/version.test.js 会校验两者一致），
        * 界面上（标题栏、说明页）都会带上它，免得用户手里的 exe 究竟是哪个版本搞不清。
        */
-      const APP_VERSION = '0.2.4';
+      const APP_VERSION = '0.3.1';
 
       Object.assign(__m, { APP_VERSION });
 
@@ -1663,11 +1663,17 @@ details.acc .acc-body { padding-bottom: 12px; }
         return listKeys().reduce((sum, k) => sum + k.length + (localStorage.getItem(k)?.length || 0), 0);
       }
 
+      /** 不进备份的键：凭据类数据一旦进了备份文件，分享或上传时就会泄露 */
+      const SECRET_KEYS = new Set(['sync.creds', 'sync.meta']);
+
       function exportAll() {
         const data = {};
         for (const k of listKeys()) {
           if (k === SCHEMA_KEY) continue;
-          data[k.slice(NS.length + 1)] = JSON.parse(localStorage.getItem(k));
+          const name = k.slice(NS.length + 1);
+          // GitHub token 属于本机凭据，绝不写进备份文件
+          if (SECRET_KEYS.has(name)) continue;
+          data[name] = JSON.parse(localStorage.getItem(k));
         }
         return {
           app: 'open-nianfo-counter',
@@ -1692,7 +1698,15 @@ details.acc .acc-body { padding-bottom: 12px; }
         const idRemap = new Map();
 
         if (!merge) {
+          // 整体覆盖时也要保住本机凭据：否则导入一份别人的备份，
+          // 会把自己刚配好的 GitHub token 一起清掉，用户还得重新填
+          const keep = new Map();
+          for (const name of SECRET_KEYS) {
+            const v = localStorage.getItem(key(name));
+            if (v != null) keep.set(name, v);
+          }
           for (const k of listKeys()) if (k !== SCHEMA_KEY) localStorage.removeItem(k);
+          for (const [name, v] of keep) localStorage.setItem(key(name), v);
         }
 
         // 功课列表：按 id 合并；同名（忽略首尾空格）并入本机同名功课，保留本机 id
@@ -3527,6 +3541,457 @@ details.acc .acc-body { padding-bottom: 12px; }
     }).call(undefined);
   };
 
+  __defs["src/lib/ghsync.js"] = function (__m) {
+    (function () {
+      /**
+       * Git 托管平台同步（GitHub / Gitee）。
+       *
+       * 为什么选这条路：
+       *   用户没有域名、没有证书、不想在 VPS 上装 nginx。
+       *   而「手机端要能用蓝牙 → 页面必须是 https → 请求的接口也必须是 https」，
+       *   在没有域名的前提下基本无解。GitHub / Gitee 的 API 天然 https，
+       *   正好把「同步通道」这件事外包出去，还顺带获得版本历史（可回滚）。
+       *
+       * 为什么还支持 Gitee：
+       *   api.github.com 在国内时常需要代理，而同步这件事如果「得先开 VPN」，
+       *   就等于没有自动同步。Gitee 国内直连，把这个问题从根上解决。
+       *
+       * 数据形态：
+       *   仓库里存一个 JSON 文件（默认 onc-backup.json），内容就是 exportAll() 的结果。
+       *   不做「服务端合并」——托管平台只是个文件柜。合并发生在上传前的本地：
+       *   先用 remote 的旧内容算增量，再生成新的合并结果覆盖上去。
+       *
+       * 关键约束（踩过的坑都在这）：
+       *   1) GitHub Contents API 写文件必须带 sha（当前文件版本），否则 409 冲突；
+       *      两台设备同时写就必然有一方收到 409 → 我们重试一次（拉最新 sha 再写）。
+       *   2) base64 要处理中文：不能直接 btoa(string)，要先 TextEncoder 成字节。
+       *   3) Token 存在 localStorage，属于「本机凭据」，导出备份时会带出去 ——
+       *      所以 exportAll 里必须剔除 token 字段。
+       *   4) Gitee 的 API 形状与 GitHub 不同（见 PROVIDERS），不能只换域名。
+       */
+      const { importAll } = __import("src/lib/store.js");
+      /* ---------------- 服务商定义 ---------------- */
+
+      /**
+       * 两个平台的差异集中在这张表里，业务代码不必到处 if。
+       *
+       * Gitee 的坑：
+       *   · 写文件不是 PUT /contents/:path，而是 POST /contents/:path
+       *   · 认证用 ?access_token= 查询参数（也支持 Bearer，但老接口更稳）
+       *   · 没有 permissions 字段，无法预检写权限，只能靠实际写入报错
+       *   · 失败返回的字段名是 message，和 GitHub 一致，可以直接复用
+       */
+      const PROVIDERS = {
+        github: {
+          id: 'github',
+          label: 'GitHub',
+          base: 'https://api.github.com',
+          apiVersion: '2022-11-28',
+          kind: 'github',
+          repoUrl: 'https://github.com',
+          tokenUrl: 'https://github.com/settings/tokens?type=beta',
+          needProxy: true,
+          setupHint: '国内有时需要代理才能访问 api.github.com',
+        },
+        gitee: {
+          id: 'gitee',
+          label: 'Gitee（码云）',
+          base: 'https://gitee.com/api/v5',
+          kind: 'gitee',
+          repoUrl: 'https://gitee.com',
+          tokenUrl: 'https://gitee.com/profile/personal_access_tokens',
+          needProxy: false,
+          setupHint: '国内直连，不需要代理',
+        },
+      };
+
+      function providerOf(creds) {
+        return PROVIDERS[creds?.provider] || PROVIDERS.github;
+      }
+
+      /* ---------------- 本地凭据 ---------------- */
+
+      /** 本地凭据：provider / token / 仓库 / 路径 */
+      const CRED_KEY = 'onc.sync.creds';
+      /** 同步元信息：上次同步时间、上次上传的内容指纹 */
+      const META_KEY = 'onc.sync.meta';
+
+      function loadCreds() {
+        try {
+          const c = JSON.parse(localStorage.getItem(CRED_KEY) || 'null');
+          return c || null;
+        } catch {
+          return null;
+        }
+      }
+
+      function saveCreds(creds) {
+        if (creds) localStorage.setItem(CRED_KEY, JSON.stringify(creds));
+        else localStorage.removeItem(CRED_KEY);
+      }
+
+      function loadMeta() {
+        try {
+          return JSON.parse(localStorage.getItem(META_KEY) || 'null') || {};
+        } catch {
+          return {};
+        }
+      }
+
+      function saveMeta(meta) {
+        localStorage.setItem(META_KEY, JSON.stringify(meta));
+      }
+
+      /* ---------------- base64（支持中文） ---------------- */
+
+      function toBase64(str) {
+        const bytes = new TextEncoder().encode(str);
+        let bin = '';
+        const chunk = 0x8000;   // 分块，避免 apply 参数过多导致栈溢出
+        for (let i = 0; i < bytes.length; i += chunk) {
+          bin += String.fromCharCode(...bytes.subarray(i, i + chunk));
+        }
+        return btoa(bin);
+      }
+
+      function fromBase64(b64) {
+        const bin = atob(b64.replace(/\s/g, ''));
+        const bytes = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        return new TextDecoder().decode(bytes);
+      }
+
+      // 仅供测试引用（中文 base64 往返是易错点，必须单独验证）
+      Object.assign(__m, { toBase64: toBase64, fromBase64: fromBase64 });
+      /* ---------------- HTTP ---------------- */
+
+      function buildHeaders(creds, provider, hasBody) {
+        const h = { Accept: 'application/json' };
+        if (hasBody) h['Content-Type'] = 'application/json';
+        if (provider.kind === 'github') {
+          h.Authorization = `Bearer ${creds.token}`;
+          h.Accept = 'application/vnd.github+json';
+          h['X-GitHub-Api-Version'] = provider.apiVersion;
+        }
+        return h;
+      }
+
+      /** 带 token 的 URL（Gitee 用查询参数认证） */
+      function authUrl(creds, provider, url) {
+        if (provider.kind === 'gitee') {
+          const sep = url.includes('?') ? '&' : '?';
+          return `${url}${sep}access_token=${encodeURIComponent(creds.token)}`;
+        }
+        return url;
+      }
+
+      async function apiFetch(creds, url, init = {}) {
+        const provider = providerOf(creds);
+        const res = await fetch(authUrl(creds, provider, url), {
+          ...init,
+          headers: { ...buildHeaders(creds, provider, !!init.body), ...(init.headers || {}) },
+        });
+        return res;
+      }
+
+      /* ---------------- 校验 ---------------- */
+
+      /** 校验凭据并返回用户信息 + 仓库是否可写 */
+      async function verifyCreds(creds) {
+        const provider = providerOf(creds);
+        const who = provider.label;
+
+        // 1) 用户
+        const u = await apiFetch(creds, `${provider.base}/user`);
+        if (u.status === 401 || u.status === 403) {
+          throw new Error(`${who} 令牌无效或已过期（${u.status}）`);
+        }
+        if (!u.ok) throw new Error(`无法访问 ${who}（${u.status}），${provider.setupHint}`);
+        const user = await u.json();
+
+        // 2) 仓库
+        const r = await apiFetch(creds, `${provider.base}/repos/${creds.owner}/${creds.repo}`);
+        if (r.status === 404) {
+          throw new Error(`找不到仓库 ${creds.owner}/${creds.repo}，请先在 ${who} 上新建（私有即可）`);
+        }
+        if (!r.ok) throw new Error(`无法读取仓库（${r.status}）`);
+        const repo = await r.json();
+
+        // GitHub 能预检写权限；Gitee 没有这个字段，留给实际写入时暴露
+        if (provider.kind === 'github' && repo.permissions && !repo.permissions.push) {
+          throw new Error('令牌没有写入权限，请确认勾选了 Contents: Read and write');
+        }
+
+        return {
+          login: user.login || user.name,
+          repo: repo.full_name || `${creds.owner}/${creds.repo}`,
+          private: repo.private !== false,
+          defaultBranch: repo.default_branch || repo.default_branch_name || 'master',
+          provider: provider.id,
+          providerLabel: provider.label,
+        };
+      }
+
+      /* ---------------- 读写 ---------------- */
+
+      /** 读取远端文件；不存在返回 { exists: false } */
+      async function pullRemote(creds) {
+        const provider = providerOf(creds);
+        const ref = creds.branch || 'main';
+        const url = `${provider.base}/repos/${creds.owner}/${creds.repo}/contents/${encodeURIComponent(creds.path)}?ref=${encodeURIComponent(ref)}`;
+        const res = await apiFetch(creds, url);
+        if (res.status === 404) return { exists: false };
+        if (!res.ok) throw new Error(`拉取失败（${res.status}）`);
+        const body = await res.json();
+        const text = fromBase64(body.content || '');
+        let data = null;
+        try { data = JSON.parse(text); } catch { throw new Error('远端文件不是合法的 JSON'); }
+        return { exists: true, sha: body.sha, data, size: body.size, updatedAt: body.commit?.author?.date || null };
+      }
+
+      /**
+       * 写入远端文件。
+       * 冲突（409/422）时重新拉一次 sha 再写一次 —— 两台设备几乎同时同步时会发生。
+       */
+      async function pushRemote(creds, payload, { sha = null, message } = {}) {
+        const provider = providerOf(creds);
+        const url = `${provider.base}/repos/${creds.owner}/${creds.repo}/contents/${encodeURIComponent(creds.path)}`;
+        const body = {
+          message: message || `sync: ${new Date().toISOString()}`,
+          content: toBase64(JSON.stringify(payload, null, 2)),
+          branch: creds.branch || 'main',
+        };
+        if (sha) body.sha = sha;
+
+        // Gitee 用 POST 创建/更新，GitHub 用 PUT
+        const method = provider.kind === 'gitee' ? 'POST' : 'PUT';
+        let res = await apiFetch(creds, url, { method, body: JSON.stringify(body) });
+
+        if (res.status === 409 || res.status === 422) {
+          // 冲突：远端已被别人改过，取最新 sha 再试一次
+          const latest = await pullRemote(creds);
+          if (latest.exists) body.sha = latest.sha;
+          else delete body.sha;
+          res = await apiFetch(creds, url, { method, body: JSON.stringify(body) });
+        }
+
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(`上传失败（${res.status}）${err.message ? '：' + err.message : ''}`);
+        }
+        const out = await res.json();
+        return { sha: out.content?.sha || null, commit: out.commit?.sha || null };
+      }
+
+      /* ---------------- 合并策略 ---------------- */
+
+      /**
+       * 合并远端数据到本地。
+       *
+       * 规则与「导入备份」保持一致（同名功课按名称合并、日记录取较大值）。
+       * 取较大值的语义是「谁按得多以谁为准」，避免一次误同步把数字翻倍。
+       */
+      async function applyRemoteToLocal(remoteData) {
+        return importAll(remoteData, { merge: true });
+      }
+
+      /** 内容指纹：用于判断「本地自上次同步后有没有变」 */
+      function fingerprint(payload) {
+        const s = JSON.stringify(payload?.data || {});
+        let h = 0;
+        for (let i = 0; i < s.length; i++) {
+          h = (h * 31 + s.charCodeAt(i)) | 0;
+        }
+        return `${s.length}:${h}`;
+      }
+
+      Object.assign(__m, { PROVIDERS, loadCreds, saveCreds, loadMeta, saveMeta, verifyCreds, pullRemote, pushRemote, applyRemoteToLocal, fingerprint });
+
+    }).call(undefined);
+  };
+
+  __defs["src/lib/sync.js"] = function (__m) {
+    (function () {
+      /**
+       * 同步调度器：把「拉取 → 合并 → 上传」串成一个可重试的流程。
+       *
+       * 设计要点（都是为了「不出错」，不是为了「快」）：
+       *
+       * 1. 先拉后推。
+       *    如果先推，会把远端另一台设备刚写的记录覆盖掉。先拉能保证
+       *    「两端的记录都在」，推送出去的是合并后的全集。
+       *
+       * 2. 只在有变化时推送。
+       *    用内容指纹判断，避免每次心跳都产生一个 commit 把仓库刷满。
+       *
+       * 3. 失败不阻塞。
+       *    同步是附加服务，断网、Token 过期都不该影响用户念佛计数。
+       *    所有错误只写状态，不抛到 UI 线程之外。
+       *
+       * 4. 手动与自动分开。
+       *    自动同步只在「页面可见 + 有凭据 + 距上次超过 N 秒」时触发；
+       *    用户点「立即同步」则强制走一次完整流程。
+       */
+      const { loadCreds, saveCreds, loadMeta, saveMeta, verifyCreds, pullRemote, pushRemote, applyRemoteToLocal, fingerprint } = __import("src/lib/ghsync.js");
+      const { exportAll } = __import("src/lib/store.js");
+      const { emit, on } = __import("src/lib/bus.js");
+      /** 自动同步最小间隔（毫秒）。太密会把仓库 commit 刷爆，太疏手机端看不到变化 */
+      const AUTO_INTERVAL = 5 * 60 * 1000;
+
+      let running = false;
+      let lastAttemptAt = 0;
+      let status = { state: 'idle', message: '未配置', at: null };
+      let timer = 0;
+
+      function setStatus(next) {
+        status = { ...status, ...next, at: Date.now() };
+        emit('sync:status', status);
+      }
+
+      function getSyncStatus() {
+        return status;
+      }
+
+      function getSyncConfig() {
+        return loadCreds();
+      }
+
+      function isConfigured() {
+        return !!loadCreds()?.token;
+      }
+
+      async function configure(creds) {
+        const info = await verifyCreds(creds);
+        const next = {
+          provider: creds.provider || 'github',
+          token: creds.token.trim(),
+          owner: creds.owner.trim(),
+          repo: creds.repo.trim(),
+          path: (creds.path || 'onc-backup.json').trim(),
+          branch: creds.branch || info.defaultBranch || 'main',
+        };
+        saveCreds(next);
+        setStatus({ state: 'ok', message: `已连接 ${info.providerLabel || ''} ${info.repo}`.trim(), info });
+        scheduleAuto();
+        return info;
+      }
+
+      function disconnect() {
+        saveCreds(null);
+        saveMeta({});
+        stopAuto();
+        setStatus({ state: 'idle', message: '已断开同步' });
+      }
+
+      /**
+       * 完整同步：拉 → 合并 → 推。
+       * @param {{ pushOnly?: boolean, silent?: boolean }} opts
+       */
+      async function syncNow(opts = {}) {
+        if (running) return { skipped: true, reason: 'busy' };
+        const creds = loadCreds();
+        if (!creds?.token) {
+          setStatus({ state: 'idle', message: '未配置同步' });
+          return { skipped: true, reason: 'no-creds' };
+        }
+        running = true;
+        const meta = loadMeta();
+        try {
+          setStatus({ state: 'syncing', message: '正在同步…' });
+
+          // 1) 拉
+          const remote = await pullRemote(creds);
+          let pulled = 0;
+          if (remote.exists && remote.data) {
+            const summary = await applyRemoteToLocal(remote.data);
+            pulled = summary?.logs || 0;
+          }
+
+          // 2) 推（内容没变就跳过，省 commit）
+          const payload = exportAll();
+          const fp = fingerprint(payload);
+          let pushed = false;
+          if (fp !== meta.lastFingerprint || !remote.exists) {
+            await pushRemote(creds, payload, {
+              sha: remote.exists ? remote.sha : null,
+              message: `念佛计数器同步 ${new Date().toLocaleString('zh-CN')}`,
+            });
+            pushed = true;
+            saveMeta({ ...meta, lastFingerprint: fp, lastSyncAt: Date.now() });
+          } else {
+            saveMeta({ ...meta, lastSyncAt: Date.now() });
+          }
+
+          setStatus({
+            state: 'ok',
+            message: pushed ? `已同步（拉取 ${pulled} 条，已上传）` : '已是最新',
+            lastSyncAt: Date.now(),
+          });
+          return { ok: true, pulled, pushed };
+        } catch (err) {
+          setStatus({ state: 'error', message: err.message || '同步失败' });
+          if (!opts.silent) console.warn('[sync]', err);
+          return { ok: false, error: err.message };
+        } finally {
+          running = false;
+          lastAttemptAt = Date.now();
+        }
+      }
+
+      /* ---------------- 自动同步 ---------------- */
+
+      function scheduleAuto() {
+        stopAuto();
+        if (!isConfigured()) return;
+        timer = setInterval(() => {
+          if (document.visibilityState !== 'visible') return;
+          if (Date.now() - lastAttemptAt < AUTO_INTERVAL) return;
+          syncNow({ silent: true });
+        }, 60 * 1000);
+      }
+
+      function stopAuto() {
+        if (timer) { clearInterval(timer); timer = 0; }
+      }
+
+      /** 应用启动时调用 */
+      function startAutoSync() {
+        if (!isConfigured()) {
+          setStatus({ state: 'idle', message: '未配置同步' });
+          return;
+        }
+        const meta = loadMeta();
+        setStatus({
+          state: 'idle',
+          message: meta.lastSyncAt
+            ? `上次同步 ${new Date(meta.lastSyncAt).toLocaleString('zh-CN')}`
+            : '尚未同步过',
+        });
+        scheduleAuto();
+
+        // 切回前台时补一次（手机用户最常遇到的场景：锁屏后再打开）
+        document.addEventListener('visibilitychange', () => {
+          if (document.visibilityState !== 'visible') return;
+          if (Date.now() - lastAttemptAt < AUTO_INTERVAL) return;
+          syncNow({ silent: true });
+        });
+
+        // 计数变化后不立刻同步（太频繁），只标记「有未同步变更」
+        on('count:changed', () => {
+          const cur = getSyncStatus();
+          if (cur.state !== 'error' && cur.state !== 'syncing') {
+            const m = loadMeta();
+            const fp = fingerprint(exportAll());
+            if (fp !== m.lastFingerprint) setStatus({ state: 'dirty', message: '有未同步的变更' });
+          }
+        });
+      }
+
+      Object.assign(__m, { getSyncStatus, getSyncConfig, isConfigured, configure, disconnect, syncNow, startAutoSync });
+
+    }).call(undefined);
+  };
+
   __defs["src/ui/device-sdk.js"] = function (__m) {
     (function () {
       const { read, write, importAll, clearAll, exportAll } = __import("src/lib/store.js");
@@ -5099,6 +5564,9 @@ details.acc .acc-body { padding-bottom: 12px; }
             fileInput,
           ));
 
+          /* ---------- 云同步（GitHub 私有仓库） ---------- */
+          box.append(buildSyncCard(ctx, paint));
+
           /* ---------- 关于入口 ---------- */
           box.append(h('div', { class: 'card' },
             h('p', { class: 'muted', style: { fontSize: '.84rem', margin: 0 } },
@@ -5161,6 +5629,171 @@ details.acc .acc-body { padding-bottom: 12px; }
         paint();
         const off = on('practices:changed', () => paint());
         ctx.onCleanup(off);
+      }
+
+      /* ------------------------------------------------------------------ */
+      /* 云同步卡片：GitHub 私有仓库方案                                       */
+      /* ------------------------------------------------------------------ */
+
+      /**
+       * 为什么用「表单 + 状态行」而不是向导式引导：
+       * 配置一次就够了，向导好看但后续每次进设置页都占一屏，烦。
+       * 状态行常驻，一眼能看到「上次同步是什么时候、有没有出错」。
+       */
+      function buildSyncCard(ctx, paint) {
+        const card = h('div', { class: 'card stack' });
+        card.append(h('h2', null, '多端同步'));
+
+        const creds = ctx.sync.getConfig();
+        const status = ctx.sync.getStatus();
+
+        const statusRow = h('div', {
+          class: 'note ' + (status.state === 'error' ? 'warn' : status.state === 'ok' ? 'ok' : 'info'),
+        }, status.message || '未配置');
+
+        if (creds?.token) {
+          // —— 已配置：只显示状态和操作 ——
+          const p = ctx.sync.providers[creds.provider] || ctx.sync.providers.github;
+          card.append(statusRow);
+          card.append(h('p', { class: 'muted', style: { fontSize: '.82rem', margin: 0 } },
+            `${p.label} · ${creds.owner}/${creds.repo} · ${creds.path}`));
+
+          const syncBtn = h('button', {
+            class: 'block primary',
+            onclick: async () => {
+              syncBtn.disabled = true;
+              syncBtn.textContent = '同步中…';
+              const r = await ctx.sync.syncNow();
+              syncBtn.disabled = false;
+              syncBtn.textContent = '立即同步';
+              if (r.ok) toast(r.pushed ? '同步完成，已上传' : '已是最新');
+              else if (r.error) alert('同步失败：' + r.error);
+              paint();
+            },
+          }, '立即同步');
+
+          card.append(syncBtn);
+          card.append(h('div', { class: 'row' },
+            h('button', {
+              class: 'block ghost',
+              onclick: () => {
+                if (!confirm('断开同步不会删除本地数据，也不会删除远端文件。确定断开？')) return;
+                ctx.sync.disconnect(); paint();
+              },
+            }, '断开同步'),
+          ));
+          card.append(h('p', { class: 'muted', style: { fontSize: '.8rem', margin: 0 } },
+            '打开应用时自动拉取一次；之后每 5 分钟自动同步，切回应用也会补一次。'));
+          return card;
+        }
+
+        // —— 未配置：先选服务商 ——
+        let provider = 'gitee';   // 默认 Gitee：国内直连，不用代理
+
+        card.append(h('div', { class: 'note info' },
+          '用一个私有仓库当「文件柜」，手机和电脑读写同一份文件，'
+          + '两边数据自动合到一起，不用再手动导出导入。不需要服务器、不需要域名。'));
+
+        const providerRow = h('div', { class: 'row', style: { gap: '.4rem' } });
+        const hint = h('p', { class: 'muted', style: { fontSize: '.8rem', margin: 0 } });
+
+        const formArea = h('div', { class: 'stack' });
+
+        const paintProvider = () => {
+          const p = ctx.sync.providers[provider];
+          for (const b of providerRow.querySelectorAll('button')) {
+            b.className = b.dataset.pid === provider ? 'block primary' : 'block ghost';
+          }
+          hint.textContent = p.setupHint;
+          // 重建表单：占位符和指引都随服务商变
+          formArea.innerHTML = '';
+          formArea.append(...buildForm(p));
+        };
+
+        for (const p of Object.values(ctx.sync.providers)) {
+          providerRow.append(h('button', {
+            class: 'block ghost', 'data-pid': p.id,
+            onclick: () => { provider = p.id; paintProvider(); },
+          }, p.label));
+        }
+
+        function buildForm(p) {
+          const tokenInput = h('input', {
+            type: 'password',
+            placeholder: p.id === 'gitee' ? '粘贴 Gitee 私人令牌' : 'ghp_xxxxxxxxxxxxxxxx',
+            autocomplete: 'off', spellcheck: 'false',
+          });
+          const ownerInput = h('input', { type: 'text', placeholder: `你的 ${p.label} 用户名（或个人空间地址）` });
+          const repoInput = h('input', { type: 'text', placeholder: '仓库名，例如 nianfo-data' });
+          const pathInput = h('input', { type: 'text', value: 'onc-backup.json' });
+
+          const connectBtn = h('button', {
+            class: 'block primary',
+            onclick: async () => {
+              const token = tokenInput.value.trim();
+              const owner = ownerInput.value.trim();
+              const repo = repoInput.value.trim();
+              if (!token || !owner || !repo) { alert('请填写令牌、用户名和仓库名'); return; }
+              connectBtn.disabled = true;
+              connectBtn.textContent = '验证中…';
+              try {
+                const info = await ctx.sync.configure({
+                  provider: p.id, token, owner, repo,
+                  path: pathInput.value.trim() || 'onc-backup.json',
+                });
+                toast(`已连接 ${info.repo}`);
+                paint();
+              } catch (err) {
+                alert('连接失败：' + err.message);
+                connectBtn.disabled = false;
+                connectBtn.textContent = '连接并同步';
+              }
+            },
+          }, '连接并同步');
+
+          return [
+            h('div', { class: 'field-group' }, h('label', { class: 'field' }, '访问令牌 Token'), tokenInput),
+            h('div', { class: 'row' },
+              h('div', { class: 'field-group grow' }, h('label', { class: 'field' }, '用户名'), ownerInput),
+              h('div', { class: 'field-group grow' }, h('label', { class: 'field' }, '仓库名'), repoInput),
+            ),
+            h('div', { class: 'field-group' }, h('label', { class: 'field' }, '文件名（一般不用改）'), pathInput),
+            connectBtn,
+            buildGuide(p),
+          ];
+        }
+
+        function buildGuide(p) {
+          const steps = p.id === 'gitee'
+            ? [
+                ['在 Gitee 新建仓库，选 ', h('b', null, '私有'), '（不要勾初始化 README，留空仓库也行）'],
+                ['打开 ', h('a', { href: p.tokenUrl, target: '_blank', rel: 'noopener' }, '私人令牌页面'), '，点「生成新令牌」'],
+                ['勾选权限 ', h('b', null, 'projects'), '（仓库读写必需）'],
+                ['提交后复制那串令牌（只显示一次），填到上面'],
+                ['如果新建的仓库默认分支叫 master 而不是 main，代码会自动识别'],
+              ]
+            : [
+                ['在 GitHub 新建仓库，选 ', h('b', null, 'Private'), '，勾选 Add a README'],
+                ['打开 ', h('a', { href: p.tokenUrl, target: '_blank', rel: 'noopener' }, 'Fine-grained tokens'), '，点 Generate new token'],
+                ['Repository access 选 ', h('b', null, 'Only select repositories'), '，勾中刚才那个仓库'],
+                ['Permissions → Repository permissions → ', h('b', null, 'Contents'), ' 设为 ', h('b', null, 'Read and write')],
+                ['生成后复制令牌，填到上面'],
+              ];
+
+          return h('details', { style: { marginTop: '.4rem' } },
+            h('summary', { style: { cursor: 'pointer', fontSize: '.86rem' } }, `怎么获取 ${p.label} 令牌和建仓库？（点开看）`),
+            h('ol', { style: { fontSize: '.84rem', lineHeight: '1.7', paddingLeft: '1.2rem' } },
+              ...steps.map((s) => h('li', null, ...(Array.isArray(s) ? s : [s]))),
+            ),
+            h('p', { class: 'muted', style: { fontSize: '.8rem', margin: '.3rem 0 0' } },
+              '令牌只存在这台设备，不会写进备份文件，也不会传给任何第三方。'),
+          );
+        }
+
+        card.append(providerRow, hint, formArea);
+        paintProvider();
+
+        return card;
       }
 
       Object.assign(__m, { renderSettings });
@@ -5301,6 +5934,8 @@ details.acc .acc-body { padding-bottom: 12px; }
       const { setActivePractice, getPractice, getSettings, getAllPractices, getLogs, findPracticeByNfc, repairAnomalies } = __import("src/lib/model.js");
       const { startScan: startNfcScan, nfcSupported } = __import("src/lib/nfc.js");
       const { read, write } = __import("src/lib/store.js");
+      const syncMod = __import("src/lib/sync.js");
+      const { PROVIDERS } = __import("src/lib/ghsync.js");
       const { backupNow, doImport, wipe } = __import("src/ui/device-sdk.js");
       const { createSimulator } = __import("src/ui/simulator.js");
       const { renderHome } = __import("src/ui/page-home.js");
@@ -5356,6 +5991,16 @@ details.acc .acc-body { padding-bottom: 12px; }
         backup: backupNow,
         wipe,
         repairAnomalies,
+        // 显式对象而非命名空间对象：构建器内联模块时，`import * as ns` 的绑定会失效
+        sync: {
+          configure: syncMod.configure,
+          disconnect: syncMod.disconnect,
+          syncNow: syncMod.syncNow,
+          getConfig: syncMod.getSyncConfig,
+          getStatus: syncMod.getSyncStatus,
+          isConfigured: syncMod.isConfigured,
+          providers: PROVIDERS,
+        },
         async importFile(file) {
           const summary = await doImport(file, { merge: true });
           return summary;
@@ -5460,6 +6105,9 @@ details.acc .acc-body { padding-bottom: 12px; }
       document.title = `念佛计数器 v${APP_VERSION}`;
       mount(parseHash());
 
+      // 同步在挂载之后再启动：先让用户看到界面，同步放后台慢慢跑
+      syncMod.startAutoSync();
+
       // 首次使用引导（轻量，不打断）
       if (!localStorage.getItem('onc.onboarded')) {
         localStorage.setItem('onc.onboarded', '1');
@@ -5471,7 +6119,7 @@ details.acc .acc-body { padding-bottom: 12px; }
       // 暴露给调试台（只读为主），方便用户自己排查。
       // bus 也放进来：出问题时可以在控制台直接 on('ble:frame', ...) 看每一帧原始字节，
       // 这比截图问「为什么不动」快得多。
-      window.__onc = { engine, ble, probe, sim: simulator, ctx, bus, on, emit };
+      window.__onc = { engine, ble, probe, sim: simulator, ctx, bus, on, emit, sync: ctx.sync };
 
       Object.assign(__m, { engine: engine, ble: ble, probe: probe, ctx: ctx });
     }).call(undefined);
