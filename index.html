@@ -603,7 +603,7 @@ details.acc .acc-body { padding-bottom: 12px; }
   </div>
 
   <script>
-/* open-nianfo-counter — built 2026-10-31T14:03:05.807Z */
+/* open-nianfo-counter — built 2026-10-31T15:46:11.265Z */
 (function () {
   'use strict';
   var __defs = {};
@@ -722,7 +722,7 @@ details.acc .acc-body { padding-bottom: 12px; }
        * 发布新版本时这里和 package.json 要同步改（tests/version.test.js 会校验两者一致），
        * 界面上（标题栏、说明页）都会带上它，免得用户手里的 exe 究竟是哪个版本搞不清。
        */
-      const APP_VERSION = '0.3.6';
+      const APP_VERSION = '0.3.8';
 
       Object.assign(__m, { APP_VERSION });
 
@@ -2122,6 +2122,18 @@ details.acc .acc-body { padding-bottom: 12px; }
 
       let cache = null;
 
+      /** 仅测试用：清空内存缓存，强制下次读取回到 localStorage */
+      function _resetCacheForTest() { cache = null; }
+
+      /**
+       * 清空内存缓存。
+       * 必须在「绕过 model 层直接写 localStorage」之后调用——典型场景是
+       * 同步拉取 / 导入备份（importAll 直接写 localStorage）。不清的话
+       * model 层还在用旧引用，界面上显示旧计数，下一次写入还会把旧数据
+       * 盖回 localStorage，把刚同步来的数据冲掉。
+       */
+      function invalidateCache() { cache = null; }
+
       /**
        * 旧版默认功课名 → 通用通道名。
        * 0.1.x 预置了「念佛/阿弥陀经…」这些具体名字，v0.2.0 起默认功课改为空白通道。
@@ -2184,8 +2196,18 @@ details.acc .acc-body { padding-bottom: 12px; }
       }
 
       const getSettings = () => ensureCache().settings;
-      const getPractices = () => ensureCache().practices.filter((p) => !p.archived);
-      const getAllPractices = () => ensureCache().practices;
+      /**
+       * 读取功课列表。
+       *
+       * ⚠ 必须按 order 排序后返回——这是一个真实踩过的 bug：
+       * movePractice 更新的是 order 字段，但这里原来只是 filter 不 sort，
+       * 返回的是底层数组顺序。结果「上移/下移」按钮看似毫无反应，
+       * 且同步合并后两端数组顺序各不相同，功课顺序在手机和电脑上对不上。
+       * 所有展示顺序都以 order 为唯一事实来源，数组顺序不算数。
+       */
+      const byOrder = (a, b) => (a.order ?? 0) - (b.order ?? 0);
+      const getPractices = () => ensureCache().practices.filter((p) => !p.archived).sort(byOrder);
+      const getAllPractices = () => [...ensureCache().practices].sort(byOrder);
       const getLogs = () => ensureCache().logs;
       const getSessions = () => ensureCache().sessions;
 
@@ -2341,10 +2363,14 @@ details.acc .acc-body { padding-bottom: 12px; }
         let logsMoved = 0;
 
         for (const g of groups) {
-          // 谁的记录多就留谁；记录数相同则留「名字更干净」的（更短），再相同留较早创建的
+          // 谁的「计数总和」大就留谁（用户主用的功课计数一定最多）；
+          // 相同则留「名字更干净」的（更短），再相同留较早创建的。
+          // 注意：按「日志条数」选会出错——一条日志可能 carry 了上万声计数，
+          // 而另一条功课有很多条小日志，条数多总数少，会留错。
+          const sumFor = (id) => s.logs.reduce((acc, l) => (l.practiceId === id ? acc + (l.count || 0) : acc), 0);
           const scored = g.practices.map((p) => ({
             p,
-            n: s.logs.filter((l) => l.practiceId === p.id).length,
+            n: sumFor(p.id),
             nameLen: String(p.name || '').length,
           }));
           scored.sort((a, b) => b.n - a.n || a.nameLen - b.nameLen || (a.p.createdAt || 0) - (b.p.createdAt || 0));
@@ -2352,8 +2378,11 @@ details.acc .acc-body { padding-bottom: 12px; }
           const drop = scored.slice(1).map((x) => x.p);
 
           for (const d of drop) {
-            // 1) 日记录改挂 + 同日累加
-            for (const log of s.logs.filter((l) => l.practiceId === d.id)) {
+            // 1) 日记录改挂 + 同日累加。
+            //    先取快照再遍历：循环里会重建 s.logs 数组，
+            //    直接遍历 s.logs 遇到多条同日记录时可能跳条（防御性写法）。
+            const pending = s.logs.filter((l) => l.practiceId === d.id);
+            for (const log of pending) {
               const exists = s.logs.find((l) => l.practiceId === keep.id && l.date === log.date);
               if (exists) {
                 exists.count = (exists.count || 0) + (log.count || 0);
@@ -2399,6 +2428,10 @@ details.acc .acc-body { padding-bottom: 12px; }
           const first = s.practices.find((p) => !p.archived);
           if (first) s.settings.activePracticeId = first.id;
           write('settings', s.settings);
+          // 界面（标题、大按钮上的功课名）靠这个事件刷新，
+          // 不发的话合并后当前功课名还是被归档那条的
+          emit('settings:changed', s.settings);
+          emit('practice:active', s.settings.activePracticeId);
         }
 
         emit('practices:changed', s.practices);
@@ -2419,7 +2452,7 @@ details.acc .acc-body { padding-bottom: 12px; }
 
       function movePractice(id, delta) {
         const s = ensureCache();
-        const list = s.practices.filter((p) => !p.archived).sort((a, b) => a.order - b.order);
+        const list = s.practices.filter((p) => !p.archived).sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
         const i = list.findIndex((p) => p.id === id);
         const j = i + delta;
         if (i < 0 || j < 0 || j >= list.length) return;
@@ -2428,6 +2461,9 @@ details.acc .acc-body { padding-bottom: 12px; }
           const target = s.practices.find((x) => x.id === p.id);
           target.order = k;
         });
+        // 底层数组也按 order 重排：让「数组顺序」与「order 字段」保持一致，
+        // 免得哪处代码忘了 sort 又回到老 bug 上
+        s.practices.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
         write('practices', s.practices);
         emit('practices:changed', s.practices);
       }
@@ -2565,12 +2601,8 @@ details.acc .acc-body { padding-bottom: 12px; }
         emit('sessions:changed', s.sessions);
       }
 
-      /** 危险操作后统一清空内存缓存，强制下次重新读盘 */
-      function invalidateCache() {
-        cache = null;
-      }
 
-      Object.assign(__m, { SCHEMA, DEFAULT_SETTINGS, newId, getSettings, getPractices, getAllPractices, getLogs, getSessions, scanAnomalies, repairAnomalies, getPractice, getActivePractice, findPracticeByNfc, getLog, todayCount, updateSettings, setActivePractice, addPractice, updatePractice, scanDuplicatePractices, mergeDuplicatePractices, archivePractice, restorePractice, movePractice, addCount, setTodayCount, recordRound, addSeconds, statsForPractice, totalsForPractice, overallTotals, pushSession, invalidateCache });
+      Object.assign(__m, { SCHEMA, DEFAULT_SETTINGS, newId, _resetCacheForTest, invalidateCache, getSettings, getPractices, getAllPractices, getLogs, getSessions, scanAnomalies, repairAnomalies, getPractice, getActivePractice, findPracticeByNfc, getLog, todayCount, updateSettings, setActivePractice, addPractice, updatePractice, scanDuplicatePractices, mergeDuplicatePractices, archivePractice, restorePractice, movePractice, addCount, setTodayCount, recordRound, addSeconds, statsForPractice, totalsForPractice, overallTotals, pushSession });
 
     }).call(undefined);
   };
@@ -4170,6 +4202,7 @@ details.acc .acc-body { padding-bottom: 12px; }
        */
       const { loadCreds, saveCreds, loadMeta, saveMeta, verifyCreds, pullRemote, pushRemote, applyRemoteToLocal, fingerprint } = __import("src/lib/ghsync.js");
       const { exportAll } = __import("src/lib/store.js");
+      const { invalidateCache } = __import("src/lib/model.js");
       const { emit, on } = __import("src/lib/bus.js");
       /** 自动同步最小间隔（毫秒）。太密会把仓库 commit 刷爆，太疏手机端看不到变化 */
       const AUTO_INTERVAL = 5 * 60 * 1000;
@@ -4178,6 +4211,9 @@ details.acc .acc-body { padding-bottom: 12px; }
       let lastAttemptAt = 0;
       let status = { state: 'idle', message: '未配置', at: null };
       let timer = 0;
+      // visibilitychange 处理器要记下来，断开同步时移除，
+      // 否则每次重新配置都会再挂一个，旧配置的凭据已清空会反复报错（审查发现的泄漏）。
+      let onVisible = null;
 
       function setStatus(next) {
         status = { ...status, ...next, at: Date.now() };
@@ -4209,6 +4245,9 @@ details.acc .acc-body { padding-bottom: 12px; }
         saveCreds(next);
         setStatus({ state: 'ok', message: `已连接 ${info.providerLabel || ''} ${info.repo}`.trim(), info });
         scheduleAuto();
+        // 配置成功后立即同步一次：用户填完凭据最想看到的就是
+        // 「另一台设备的数据马上过来」，等到下个整分钟才会拉就太蠢了。
+        syncNow({ silent: true });
         return info;
       }
 
@@ -4241,6 +4280,10 @@ details.acc .acc-body { padding-bottom: 12px; }
           if (remote.exists && remote.data) {
             const summary = await applyRemoteToLocal(remote.data);
             pulled = summary?.logs || 0;
+            // 关键：importAll 直接写 localStorage，绕过了 model 层。
+            // 不清缓存的话，界面显示的还是旧计数，且下一次写入会把旧数据
+            // 盖回 localStorage，把刚拉来的数据冲掉（真实踩过的坑）。
+            if (pulled || summary?.practices) invalidateCache();
           }
 
           // 2) 推（内容没变就跳过，省 commit）
@@ -4293,6 +4336,10 @@ details.acc .acc-body { padding-bottom: 12px; }
 
       function stopAuto() {
         if (timer) { clearInterval(timer); timer = 0; }
+        if (onVisible) {
+          document.removeEventListener('visibilitychange', onVisible);
+          onVisible = null;
+        }
       }
 
       /** 应用启动时调用 */
@@ -4311,20 +4358,29 @@ details.acc .acc-body { padding-bottom: 12px; }
         scheduleAuto();
 
         // 切回前台时补一次（手机用户最常遇到的场景：锁屏后再打开）
-        document.addEventListener('visibilitychange', () => {
+        if (onVisible) document.removeEventListener('visibilitychange', onVisible);
+        onVisible = () => {
           if (document.visibilityState !== 'visible') return;
           if (Date.now() - lastAttemptAt < AUTO_INTERVAL) return;
           syncNow({ silent: true });
-        });
+        };
+        document.addEventListener('visibilitychange', onVisible);
 
-        // 计数变化后不立刻同步（太频繁），只标记「有未同步变更」
+        // 计数变化后不立刻同步（太频繁），只标记「有未同步变更」。
+        // 用 3 秒防抖：连续计数（尤其 BLE 补录一次 +N）时不至于每次都全量序列化，
+        // 那样会卡顿——这是审查发现的性能问题。
+        let dirtyTimer = 0;
         on('count:changed', () => {
-          const cur = getSyncStatus();
-          if (cur.state !== 'error' && cur.state !== 'syncing') {
-            const m = loadMeta();
-            const fp = fingerprint(exportAll());
-            if (fp !== m.lastFingerprint) setStatus({ state: 'dirty', message: '有未同步的变更' });
-          }
+          if (dirtyTimer) return;
+          dirtyTimer = setTimeout(() => {
+            dirtyTimer = 0;
+            const cur = getSyncStatus();
+            if (cur.state !== 'error' && cur.state !== 'syncing') {
+              const m = loadMeta();
+              const fp = fingerprint(exportAll());
+              if (fp !== m.lastFingerprint) setStatus({ state: 'dirty', message: '有未同步的变更' });
+            }
+          }, 3000);
         });
       }
 
@@ -6307,7 +6363,7 @@ details.acc .acc-body { padding-bottom: 12px; }
       const { createBle, SUPPORTED } = __import("src/lib/ble.js");
       const { createProbe } = __import("src/lib/probe.js");
       const { createEngine } = __import("src/lib/engine.js");
-      const { setActivePractice, getPractice, getSettings, getAllPractices, getLogs, findPracticeByNfc, repairAnomalies } = __import("src/lib/model.js");
+      const { setActivePractice, getPractice, getSettings, getAllPractices, getLogs, findPracticeByNfc, repairAnomalies, invalidateCache } = __import("src/lib/model.js");
       const { startScan: startNfcScan, nfcSupported } = __import("src/lib/nfc.js");
       const { read, write } = __import("src/lib/store.js");
       const syncMod = __import("src/lib/sync.js");
@@ -6379,6 +6435,8 @@ details.acc .acc-body { padding-bottom: 12px; }
         },
         async importFile(file) {
           const summary = await doImport(file, { merge: true });
+          // 导入直接写了 localStorage，model 层缓存必须作废，否则界面显示旧数据
+          invalidateCache();
           return summary;
         },
         exportCsv,
