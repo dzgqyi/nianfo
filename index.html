@@ -603,7 +603,7 @@ details.acc .acc-body { padding-bottom: 12px; }
   </div>
 
   <script>
-/* open-nianfo-counter — built 2026-10-31T07:23:29.310Z */
+/* open-nianfo-counter — built 2026-10-31T10:16:21.855Z */
 (function () {
   'use strict';
   var __defs = {};
@@ -722,7 +722,7 @@ details.acc .acc-body { padding-bottom: 12px; }
        * 发布新版本时这里和 package.json 要同步改（tests/version.test.js 会校验两者一致），
        * 界面上（标题栏、说明页）都会带上它，免得用户手里的 exe 究竟是哪个版本搞不清。
        */
-      const APP_VERSION = '0.3.1';
+      const APP_VERSION = '0.3.2';
 
       Object.assign(__m, { APP_VERSION });
 
@@ -3726,27 +3726,94 @@ details.acc .acc-body { padding-bottom: 12px; }
           login: user.login || user.name,
           repo: repo.full_name || `${creds.owner}/${creds.repo}`,
           private: repo.private !== false,
-          defaultBranch: repo.default_branch || repo.default_branch_name || 'master',
+          defaultBranch: repo.default_branch || repo.default_branch_name || await detectBranch(creds, provider),
           provider: provider.id,
           providerLabel: provider.label,
         };
       }
 
+      /**
+       * 探测仓库的分支名。
+       *
+       * 为什么需要：Gitee 的仓库信息接口有时不返回 default_branch，
+       * 而 Gitee 新建仓库默认是 master、GitHub 是 main。
+       * 猜错的后果是「写文件时报 404 分支不存在」，用户看到的是莫名其妙的上传失败。
+       * 这里直接问 /branches，取第一个（Gitee/GitHub 都把默认分支排在第一个）。
+       */
+      async function detectBranch(creds, provider) {
+        try {
+          const res = await apiFetch(creds, `${provider.base}/repos/${creds.owner}/${creds.repo}/branches`);
+          if (res.ok) {
+            const list = await res.json();
+            if (Array.isArray(list) && list.length) {
+              const names = list.map((b) => b.name).filter(Boolean);
+              if (names.includes('main')) return 'main';
+              if (names.includes('master')) return 'master';
+              if (names[0]) return names[0];
+            }
+          }
+        } catch { /* 探测失败就用默认值 */ }
+        return provider.kind === 'gitee' ? 'master' : 'main';
+      }
+
       /* ---------------- 读写 ---------------- */
 
-      /** 读取远端文件；不存在返回 { exists: false } */
+      /**
+       * 读取远端文件；不存在返回 { exists: false }
+       *
+       * 这里踩过两个 Gitee 的坑，都是「明明没文件却报错」：
+       *
+       * 坑一：路径不存在时 Gitee 不一定返回 404，而是返回 200 + 仓库默认内容
+       *      （README 的 base64，甚至空 content）。如果直接 JSON.parse，
+       *      就会得到「远端文件不是合法的 JSON」，用户完全不知道怎么修。
+       *
+       * 坑二：分支名硬编码 main。Gitee 新仓库默认叫 master，
+       *      带着 ?ref=main 去查，Gitee 会忽略这个 ref 返回默认分支的内容，
+       *      于是又落到坑一里。
+       *
+       * 处理策略：解析失败时按「文件不存在」处理（exists:false），让上层直接上传覆盖。
+       * 理由是：真实备份文件必然是可解析的 JSON，解析不了就说明那不是我们的文件，
+       * 覆盖它比卡住用户更合理。只有文件很大（>1MB 且解析失败）才报错，
+       * 那种情况更像是路径撞上了别人的文件，不该盲覆盖。
+       */
       async function pullRemote(creds) {
         const provider = providerOf(creds);
-        const ref = creds.branch || 'main';
-        const url = `${provider.base}/repos/${creds.owner}/${creds.repo}/contents/${encodeURIComponent(creds.path)}?ref=${encodeURIComponent(ref)}`;
+        const hasBranch = !!creds.branch;
+        let url = `${provider.base}/repos/${creds.owner}/${creds.repo}/contents/${encodeURIComponent(creds.path)}`;
+        // 只有明确知道分支时才带 ref：瞎带一个不存在的 ref，Gitee 会返回默认分支内容
+        if (hasBranch) url += `?ref=${encodeURIComponent(creds.branch)}`;
+
         const res = await apiFetch(creds, url);
         if (res.status === 404) return { exists: false };
         if (!res.ok) throw new Error(`拉取失败（${res.status}）`);
+
         const body = await res.json();
-        const text = fromBase64(body.content || '');
-        let data = null;
-        try { data = JSON.parse(text); } catch { throw new Error('远端文件不是合法的 JSON'); }
-        return { exists: true, sha: body.sha, data, size: body.size, updatedAt: body.commit?.author?.date || null };
+
+        // Gitee 在路径不存在时可能返回数组（目录列表）或没有 content 字段
+        if (!body || Array.isArray(body) || typeof body.content !== 'string' || !body.sha) {
+          return { exists: false };
+        }
+
+        const text = fromBase64(body.content);
+        // 空文件 / 只有空白：当作没有内容，不报错
+        if (!text.trim()) return { exists: false };
+
+        try {
+          const data = JSON.parse(text);
+          // 只认本应用的备份格式，别的东西一律视为「路径被占用了」
+          if (!data || data.app !== 'open-nianfo-counter') {
+            const size = text.length;
+            if (size > 1024 * 1024) {
+              throw new Error(`远端 ${creds.path} 被其他文件占用（${(size / 1024).toFixed(0)}KB），请在仓库里删掉它或换个文件名`);
+            }
+            return { exists: false, foreign: true };
+          }
+          return { exists: true, sha: body.sha, data, size: text.length, updatedAt: body.commit?.author?.date || null };
+        } catch (err) {
+          if (err.message && err.message.includes('被其他文件占用')) throw err;
+          // 解析不了：多半是 Gitee 返回的仓库默认内容，当成空仓库
+          return { exists: false, foreign: true };
+        }
       }
 
       /**
@@ -3773,6 +3840,18 @@ details.acc .acc-body { padding-bottom: 12px; }
           if (latest.exists) body.sha = latest.sha;
           else delete body.sha;
           res = await apiFetch(creds, url, { method, body: JSON.stringify(body) });
+        }
+
+        // 分支名不对（Gitee 老仓库是 master，新的是 main）：换成另一个分支重试一次
+        if (res.status === 404 || res.status === 400) {
+          const other = (creds.branch || 'main') === 'main' ? 'master' : 'main';
+          const retryBody = { ...body, branch: other };
+          const retry = await apiFetch(creds, url, { method, body: JSON.stringify(retryBody) });
+          if (retry.ok) {
+            const out = await retry.json();
+            return { sha: out.content?.sha || null, commit: out.commit?.sha || null, branch: other };
+          }
+          res = retry;
         }
 
         if (!res.ok) {
@@ -3912,10 +3991,15 @@ details.acc .acc-body { padding-bottom: 12px; }
           const fp = fingerprint(payload);
           let pushed = false;
           if (fp !== meta.lastFingerprint || !remote.exists) {
-            await pushRemote(creds, payload, {
+            const up = await pushRemote(creds, payload, {
               sha: remote.exists ? remote.sha : null,
               message: `念佛计数器同步 ${new Date().toLocaleString('zh-CN')}`,
             });
+            // 上传时若发现分支名不对（Gitee 老仓库是 master），把新分支名记住，
+            // 下次就不用再试错一轮
+            if (up?.branch && up.branch !== creds.branch) {
+              saveCreds({ ...creds, branch: up.branch });
+            }
             pushed = true;
             saveMeta({ ...meta, lastFingerprint: fp, lastSyncAt: Date.now() });
           } else {
