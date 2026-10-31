@@ -603,7 +603,7 @@ details.acc .acc-body { padding-bottom: 12px; }
   </div>
 
   <script>
-/* open-nianfo-counter — built 2026-10-31T10:16:21.855Z */
+/* open-nianfo-counter — built 2026-10-31T11:25:33.473Z */
 (function () {
   'use strict';
   var __defs = {};
@@ -722,7 +722,7 @@ details.acc .acc-body { padding-bottom: 12px; }
        * 发布新版本时这里和 package.json 要同步改（tests/version.test.js 会校验两者一致），
        * 界面上（标题栏、说明页）都会带上它，免得用户手里的 exe 究竟是哪个版本搞不清。
        */
-      const APP_VERSION = '0.3.2';
+      const APP_VERSION = '0.3.3';
 
       Object.assign(__m, { APP_VERSION });
 
@@ -3778,10 +3778,10 @@ details.acc .acc-body { padding-bottom: 12px; }
        */
       async function pullRemote(creds) {
         const provider = providerOf(creds);
-        const hasBranch = !!creds.branch;
-        let url = `${provider.base}/repos/${creds.owner}/${creds.repo}/contents/${encodeURIComponent(creds.path)}`;
-        // 只有明确知道分支时才带 ref：瞎带一个不存在的 ref，Gitee 会返回默认分支内容
-        if (hasBranch) url += `?ref=${encodeURIComponent(creds.branch)}`;
+        // 不带 ref：两个平台在缺省 ref 时都会走仓库默认分支，这是唯一不会猜错的方式。
+        // 之前带 ?ref=main 而仓库实际是 master 时，Gitee 会「忽略参数返回默认分支内容」——
+        // 看着像成功，实际拿到的是别的东西，反而更难排查。
+        const url = `${provider.base}/repos/${creds.owner}/${creds.repo}/contents/${encodeURIComponent(creds.path)}`;
 
         const res = await apiFetch(creds, url);
         if (res.status === 404) return { exists: false };
@@ -3818,48 +3818,87 @@ details.acc .acc-body { padding-bottom: 12px; }
 
       /**
        * 写入远端文件。
-       * 冲突（409/422）时重新拉一次 sha 再写一次 —— 两台设备几乎同时同步时会发生。
+       *
+       * 这里有一串必须按顺序处理的分支问题，全是 Gitee 上真踩出来的：
+       *
+       * 现象：第一次同步成功，第二次点「立即同步」报
+       *      「上传失败（400）：只允许在分支上创建或更新文件」
+       *
+       * 原因：第一次是「新建文件」，Gitee 对新建比较宽容（甚至能忽略错的 branch）；
+       *      第二次是「更新已有文件」，Gitee 会严格校验 branch 是否存在。
+       *      于是分支名一错，第一次侥幸通过、第二次必挂。
+       *
+       * 对策（按顺序）：
+       *   1) 先按 creds.branch 推；
+       *   2) 409/422 → 冲突，重拉 sha 再推；
+       *   3) 400/404 → 分支名不对，遍历候选分支重试（master / main / 实测分支）；
+       *   4) 仍失败但 sha 有值 → 可能文件在另一个分支上，不带 branch 再试一次
+       *      （Gitee 不带 branch 时默认走仓库默认分支，这是最稳的兜底）。
+       *
+       * 成功时返回实际生效的分支名，调用方存起来，下次就不用再试错。
        */
       async function pushRemote(creds, payload, { sha = null, message } = {}) {
         const provider = providerOf(creds);
         const url = `${provider.base}/repos/${creds.owner}/${creds.repo}/contents/${encodeURIComponent(creds.path)}`;
-        const body = {
-          message: message || `sync: ${new Date().toISOString()}`,
-          content: toBase64(JSON.stringify(payload, null, 2)),
-          branch: creds.branch || 'main',
-        };
-        if (sha) body.sha = sha;
+        const content = toBase64(JSON.stringify(payload, null, 2));
+        const msg = message || `sync: ${new Date().toISOString()}`;
 
         // Gitee 用 POST 创建/更新，GitHub 用 PUT
         const method = provider.kind === 'gitee' ? 'POST' : 'PUT';
-        let res = await apiFetch(creds, url, { method, body: JSON.stringify(body) });
 
-        if (res.status === 409 || res.status === 422) {
-          // 冲突：远端已被别人改过，取最新 sha 再试一次
+        const doPush = async (branch) => {
+          const body = { message: msg, content };
+          if (branch) body.branch = branch;
+          if (sha) body.sha = sha;
+          const res = await apiFetch(creds, url, { method, body: JSON.stringify(body) });
+          return { res, branch };
+        };
+
+        const first = creds.branch || 'main';
+        let attempt = await doPush(first);
+
+        // 冲突：远端已被别人改过，取最新 sha 再推一次
+        if (attempt.res.status === 409 || attempt.res.status === 422) {
           const latest = await pullRemote(creds);
-          if (latest.exists) body.sha = latest.sha;
-          else delete body.sha;
-          res = await apiFetch(creds, url, { method, body: JSON.stringify(body) });
+          const nextSha = latest.exists ? latest.sha : null;
+          const body = { message: msg, content, branch: first };
+          if (nextSha) body.sha = nextSha;
+          attempt = { res: await apiFetch(creds, url, { method, body: JSON.stringify(body) }), branch: first };
         }
 
-        // 分支名不对（Gitee 老仓库是 master，新的是 main）：换成另一个分支重试一次
-        if (res.status === 404 || res.status === 400) {
-          const other = (creds.branch || 'main') === 'main' ? 'master' : 'main';
-          const retryBody = { ...body, branch: other };
-          const retry = await apiFetch(creds, url, { method, body: JSON.stringify(retryBody) });
-          if (retry.ok) {
-            const out = await retry.json();
-            return { sha: out.content?.sha || null, commit: out.commit?.sha || null, branch: other };
+        // 分支名不对：遍历候选分支
+        if (attempt.res.status === 400 || attempt.res.status === 404) {
+          const candidates = ['master', 'main', 'gh-pages']
+            .filter((b) => b !== first);
+          // 再问一次真实分支列表，把实测到的也加上
+          const detected = await detectBranch(creds, provider);
+          if (detected && !candidates.includes(detected) && detected !== first) candidates.unshift(detected);
+
+          for (const b of candidates) {
+            const r = await doPush(b);
+            if (r.res.ok) {
+              const out = await r.res.json();
+              return { sha: out.content?.sha || null, commit: out.commit?.sha || null, branch: b };
+            }
+            attempt = r;
           }
-          res = retry;
+
+          // 最后兜底：完全不指定 branch，让平台走自己的默认分支
+          const noBranch = await doPush(null);
+          if (noBranch.res.ok) {
+            const out = await noBranch.res.json();
+            return { sha: out.content?.sha || null, commit: out.commit?.sha || null, branch: null };
+          }
+          attempt = noBranch;
         }
 
-        if (!res.ok) {
-          const err = await res.json().catch(() => ({}));
-          throw new Error(`上传失败（${res.status}）${err.message ? '：' + err.message : ''}`);
+        if (!attempt.res.ok) {
+          const err = await attempt.res.json().catch(() => ({}));
+          const msg2 = err.message || err.error || '';
+          throw new Error(`上传失败（${attempt.res.status}）${msg2 ? '：' + msg2 : ''}`);
         }
-        const out = await res.json();
-        return { sha: out.content?.sha || null, commit: out.commit?.sha || null };
+        const out = await attempt.res.json();
+        return { sha: out.content?.sha || null, commit: out.commit?.sha || null, branch: attempt.branch };
       }
 
       /* ---------------- 合并策略 ---------------- */
