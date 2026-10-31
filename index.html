@@ -603,7 +603,7 @@ details.acc .acc-body { padding-bottom: 12px; }
   </div>
 
   <script>
-/* open-nianfo-counter — built 2026-10-30T12:14:17.496Z */
+/* open-nianfo-counter — built 2026-10-31T02:02:08.404Z */
 (function () {
   'use strict';
   var __defs = {};
@@ -722,7 +722,7 @@ details.acc .acc-body { padding-bottom: 12px; }
        * 发布新版本时这里和 package.json 要同步改（tests/version.test.js 会校验两者一致），
        * 界面上（标题栏、说明页）都会带上它，免得用户手里的 exe 究竟是哪个版本搞不清。
        */
-      const APP_VERSION = '0.2.3';
+      const APP_VERSION = '0.2.4';
 
       Object.assign(__m, { APP_VERSION });
 
@@ -1859,6 +1859,151 @@ details.acc .acc-body { padding-bottom: 12px; }
     }).call(undefined);
   };
 
+  __defs["src/lib/repair.js"] = function (__m) {
+    (function () {
+      /**
+       * 异常记录修复。
+       *
+       * 背景：v0.2.3 及之前的解析器不认识「3c 系列」私有帧型，
+       * 把 4 字节的心跳帧 `3c 05 00 64` 按整帧大端读成了 10 亿，
+       * 于是每轮都先 +10 亿、再 −10 亿。净变化为 0，但：
+       *   · 日记录的 count / total 被反复撑大再打回；
+       *   · 「设备清零」检测被连续误触发；
+       *   · 若恰好在异常峰值时导出或切换功课，异常值就被固化下来了。
+       *
+       * 这个模块负责事后清理：扫描所有日记录，把明显不可能的数值按规则修正。
+       *
+       * 修复原则（宁可少改，不可改错）：
+       *   1. 只处理「超出人类可能」的量级，正常修行数据一律不碰；
+       *   2. 每次修复都留痕（fixLog），可追溯、可解释；
+       *   3. 修复前必须确认，并强烈建议先导出备份（界面层负责提示）。
+       */
+
+      /** 一天内单门功课的计数上限：按每秒 3 下、24 小时不停，也才 25 万 */
+      const SANE_DAILY_COUNT = 300000;
+      /** 单次功课时长上限（秒）：24 小时 */
+      const SANE_DAILY_SECONDS = 86400 * 2;
+
+      /**
+       * 判断一条日记录是否异常，返回问题列表（空数组表示正常）。
+       */
+      function inspectLog(log) {
+        const issues = [];
+        const count = Number(log.count) || 0;
+        const total = Number(log.total) || 0;
+        const seconds = Number(log.seconds) || 0;
+        const sessions = Number(log.sessions) || 0;
+
+        if (count < 0) issues.push({ field: 'count', value: count, reason: '负数' });
+        if (total < 0) issues.push({ field: 'total', value: total, reason: '负数' });
+        if (count > SANE_DAILY_COUNT) {
+          issues.push({ field: 'count', value: count, reason: `单日计数超过 ${SANE_DAILY_COUNT}` });
+        }
+        if (total > SANE_DAILY_COUNT) {
+          issues.push({ field: 'total', value: total, reason: `累计超过 ${SANE_DAILY_COUNT}` });
+        }
+        if (total < count) {
+          issues.push({ field: 'total', value: total, reason: '累计小于当日计数' });
+        }
+        if (seconds > SANE_DAILY_SECONDS) {
+          issues.push({ field: 'seconds', value: seconds, reason: `时长超过 ${SANE_DAILY_SECONDS} 秒` });
+        }
+        if (sessions > 10000) {
+          issues.push({ field: 'sessions', value: sessions, reason: '完成轮数异常' });
+        }
+        return issues;
+      }
+
+      /**
+       * 推算一条异常记录的「合理值」。
+       *
+       * 关键判断：异常记录里的数字已经不可信，与其猜，不如**归零并标记**，
+       * 让用户手动补录（界面会提示「请在统计页核对后手动修正」）。
+       * 唯一例外是 total < count 这种轻微不一致 —— 直接把 total 抬到 count。
+       */
+      function repairLog(log) {
+        const next = { ...log };
+        const issues = inspectLog(log);
+        if (!issues.length) return null;
+
+        const bad = new Set(issues.map((i) => i.field));
+        let changed = false;
+
+        if (bad.has('count') || bad.has('total')) {
+          // 计数类异常：整条归零。这类数字已经无法还原真实值，
+          // 保留任何一个残值都可能让统计继续失真。
+          if ((Number(log.count) || 0) > SANE_DAILY_COUNT || (Number(log.count) || 0) < 0) {
+            next.count = 0;
+            changed = true;
+          }
+          if ((Number(log.total) || 0) > SANE_DAILY_COUNT || (Number(log.total) || 0) < 0) {
+            next.total = 0;
+            changed = true;
+          }
+          if (issues.some((i) => i.reason === '累计小于当日计数')) {
+            next.total = Math.max(next.total || 0, next.count || 0);
+            changed = true;
+          }
+        }
+
+        if (bad.has('seconds') && (Number(log.seconds) || 0) > SANE_DAILY_SECONDS) {
+          next.seconds = 0;
+          changed = true;
+        }
+
+        if (bad.has('sessions') && (Number(log.sessions) || 0) > 10000) {
+          next.sessions = 0;
+          changed = true;
+        }
+
+        if (!changed) return null;
+        next.repairedAt = Date.now();
+        next.repairNote = issues.map((i) => `${i.field}=${i.value}(${i.reason})`).join('; ');
+        return next;
+      }
+
+      /**
+       * 扫描并修复全部日记录。
+       *
+       * @param {Array} logs 原始日志数组
+       * @returns {{ logs: Array, fixed: Array, scanned: number }}
+       *   fixed 里每项是 { id, date, practiceId, before, after, note }
+       */
+      function repairLogs(logs) {
+        const list = Array.isArray(logs) ? logs : [];
+        const fixed = [];
+        const out = list.map((log) => {
+          const repaired = repairLog(log);
+          if (!repaired) return log;
+          fixed.push({
+            id: log.id,
+            practiceId: log.practiceId,
+            date: log.date,
+            before: { count: log.count, total: log.total, seconds: log.seconds, sessions: log.sessions },
+            after: { count: repaired.count, total: repaired.total, seconds: repaired.seconds, sessions: repaired.sessions },
+            note: repaired.repairNote,
+          });
+          return repaired;
+        });
+        return { logs: out, fixed, scanned: list.length };
+      }
+
+      /** 只做检查不修改，用于界面预览「检测到 N 条异常」 */
+      function scanLogs(logs) {
+        const list = Array.isArray(logs) ? logs : [];
+        const bad = [];
+        for (const log of list) {
+          const issues = inspectLog(log);
+          if (issues.length) bad.push({ log, issues });
+        }
+        return bad;
+      }
+
+      Object.assign(__m, { SANE_DAILY_COUNT, SANE_DAILY_SECONDS, inspectLog, repairLogs, scanLogs });
+
+    }).call(undefined);
+  };
+
   __defs["src/lib/model.js"] = function (__m) {
     (function () {
       /**
@@ -1870,6 +2015,7 @@ details.acc .acc-body { padding-bottom: 12px; }
       const { read, write } = __import("src/lib/store.js");
       const { dayKey, nowMs } = __import("src/lib/time.js");
       const { emit } = __import("src/lib/bus.js");
+      const { repairLogs, scanLogs } = __import("src/lib/repair.js");
       const SCHEMA = 1;
 
       /* ------------------------------------------------------------------ */
@@ -1979,6 +2125,43 @@ details.acc .acc-body { padding-bottom: 12px; }
       const getAllPractices = () => ensureCache().practices;
       const getLogs = () => ensureCache().logs;
       const getSessions = () => ensureCache().sessions;
+
+      /**
+       * 扫描异常记录（只读，用于界面预览）。
+       * 见 repair.js 了解「什么算异常」以及为什么这样判定。
+       */
+      function scanAnomalies() {
+        return scanLogs(ensureCache().logs);
+      }
+
+      /**
+       * 一键修复异常记录。返回 { scanned, fixed }。
+       * 修复会写入日志，并把修复摘要存到 settings.repairHistory（保留最近 20 次），
+       * 便于用户事后核对「到底改了什么」。
+       */
+      function repairAnomalies() {
+        const s = ensureCache();
+        const { logs, fixed, scanned } = repairLogs(s.logs);
+        if (!fixed.length) return { scanned, fixed: [] };
+
+        s.logs = logs;
+        write('logs', logs);
+
+        const history = Array.isArray(s.settings.repairHistory) ? s.settings.repairHistory : [];
+        history.push({
+          at: nowMs(),
+          scanned,
+          fixed: fixed.length,
+          items: fixed.slice(0, 50).map((f) => ({ date: f.date, before: f.before, after: f.after })),
+        });
+        s.settings = { ...s.settings, repairHistory: history.slice(-20) };
+        write('settings', s.settings);
+
+        emit('logs:changed', logs);
+        emit('settings:changed', s.settings);
+        emit('repair:done', { scanned, fixed: fixed.length });
+        return { scanned, fixed };
+      }
 
       function getPractice(id) {
         return ensureCache().practices.find((p) => p.id === id) || null;
@@ -2222,7 +2405,7 @@ details.acc .acc-body { padding-bottom: 12px; }
         cache = null;
       }
 
-      Object.assign(__m, { SCHEMA, DEFAULT_SETTINGS, newId, getSettings, getPractices, getAllPractices, getLogs, getSessions, getPractice, getActivePractice, findPracticeByNfc, getLog, todayCount, updateSettings, setActivePractice, addPractice, updatePractice, archivePractice, restorePractice, movePractice, addCount, setTodayCount, recordRound, addSeconds, statsForPractice, totalsForPractice, overallTotals, pushSession, invalidateCache });
+      Object.assign(__m, { SCHEMA, DEFAULT_SETTINGS, newId, getSettings, getPractices, getAllPractices, getLogs, getSessions, scanAnomalies, repairAnomalies, getPractice, getActivePractice, findPracticeByNfc, getLog, todayCount, updateSettings, setActivePractice, addPractice, updatePractice, archivePractice, restorePractice, movePractice, addCount, setTodayCount, recordRound, addSeconds, statsForPractice, totalsForPractice, overallTotals, pushSession, invalidateCache });
 
     }).call(undefined);
   };
@@ -2332,6 +2515,59 @@ details.acc .acc-body { padding-bottom: 12px; }
         frame[3] = payload.length;
         frame.set(payload, 4);
         return frame;
+      }
+
+      /* ------------------------------------------------------------------ */
+      /* 厂商私有帧型过滤（3c 系列）                                          */
+      /* ------------------------------------------------------------------ */
+      /**
+       * 从真机原始数据里反推出来的格式（大白牛车类设备）：
+       *
+       *   3c 02 00 07 6b b5      → 计数帧
+       *   │  │  │  └────┬────┘
+       *   │  │  │       └─ 4 字节大端计数 = 486325
+       *   │  │  └─ 参数 00
+       *   │  └─ 命令码 02 = 上报计数
+       *   └─ 帧头 3c
+       *
+       *   3c 05 00 64            → 控制/心跳帧，只有 4 字节，根本不是计数帧
+       *
+       * 为什么必须过滤：不过滤时，短的 3c 05 00 64 会被启发式按「整帧大端」读成
+       * 1006960740（10 亿），于是每一轮：
+       *   +1006474415（假增量） → 下一帧 486325 又被判成「设备清零」−1006474415
+       * 净变化看着是 0，但总量、今日计数、清零检测全被污染了。
+       * 所以「帧型不对就直接丢」是正确性的前提，不是优化。
+       */
+      const FRAME_HEADER_3C = 0x3c;
+      const CMD_3C_COUNT = 0x02;
+
+      /**
+       * 判断一帧是不是 3c 私有格式。返回 'count' | 'other' | null（不是该格式）。
+       */
+      function classify3c(bytes) {
+        if (!bytes || bytes.length < 2) return null;
+        if (bytes[0] !== FRAME_HEADER_3C) return null;
+        const cmd = bytes[1];
+        // 计数帧必须是 6 字节且命令码为 02；其它命令码（05 等）一律归为 other
+        if (cmd === CMD_3C_COUNT) {
+          return bytes.length >= 6 ? 'count' : 'other';
+        }
+        return 'other';
+      }
+
+      /** 按 3c 格式解析计数帧；非计数帧返回 null */
+      function parse3c(bytes) {
+        if (classify3c(bytes) !== 'count') return null;
+        const count = readUint(bytes, 2, 4, false);
+        if (count == null) return null;
+        return {
+          protocol: '3c',
+          count,
+          battery: null,
+          seq: null,
+          extra: { cmd: CMD_3C_COUNT, param: bytes[2] },
+          valid: true,
+        };
       }
 
       /* ------------------------------------------------------------------ */
@@ -2559,6 +2795,17 @@ details.acc .acc-body { padding-bottom: 12px; }
         const gc = parseGenCounter(bytes);
         if (gc && gc.valid) return gc;
 
+        /* ---- 3c 私有格式：帧头命中就由它全权接管，绝不能落到启发式 ----
+         * 因为已知设备会混发多种帧型（02 计数帧、05 心跳帧），
+         * 启发式只看字节数不看命令码，会把心跳帧也算成计数，造成 10 亿级假增量。
+         */
+        const kind3c = classify3c(bytes);
+        if (kind3c === 'count') return parse3c(bytes);
+        if (kind3c === 'other') {
+          // 是 3c 家族但不是计数帧 —— 明确返回 null，让上层跳过，不进任何累计逻辑
+          return null;
+        }
+
         const configured = cfg.mappingConfigured === true;
         if (!configured) return parseHeuristic(bytes);
 
@@ -2628,26 +2875,46 @@ details.acc .acc-body { padding-bottom: 12px; }
 
       /**
        * 把绝对计数转换为「本次增量」。
-       * 计数器通常单调递减/递增回绕，需要处理设备清零、换电池、跨日等异常。
-       * 返回 { delta, reset }
+       * 计数器通常单调递增回绕，需要处理设备清零、换电池、跨日等异常。
+       * 返回 { delta, reset, reason }
+       *
+       * 判定顺序（顺序即正确性）：
+       *   1. 首次            → 只建基线
+       *   2. 相等            → 无变化
+       *   3. 变大且 ≤ 上限   → 正常增量
+       *   4. 变大但超上限    → 异常跳变，视为重新对齐（不计入）
+       *   5. 变小且是回绕    → 按 uint32 回绕补差
+       *   6. 变小但回退很小  → 设备清零（换电池/手动清零）
+       *   7. 变小但回退巨大  → 解析错误（帧型混入），不是清零，直接丢弃
+       *
+       * 第 7 条是踩过坑才加的：真机上心跳帧被误读成 10 亿后，下一帧真实计数
+       * 486325 「变小了 10 亿」，旧逻辑把它当成 reset 并重新对齐基线 ——
+       * 表面没事，实际上清零检测被反复触发。超过 maxResetDrop 的回退
+       * 不可能是人类操作清零，只能是解析错误，必须显式区分出来。
        */
       function diffCount(prev, next, opts = {}) {
         const maxWrap = opts.maxWrap ?? 0xffffffff;
+        const maxJump = opts.maxJump ?? 2000;
+        const maxResetDrop = opts.maxResetDrop ?? 100000;
         if (prev == null) return { delta: 0, reset: true, reason: 'first' };
         if (next === prev) return { delta: 0, reset: false };
         if (next > prev) {
           const jump = next - prev;
           // 跳跃过大视为用户手动改设备上的数（例如清零后再累加），不计入增量
-          if (jump > (opts.maxJump ?? 1000)) return { delta: 0, reset: true, reason: 'jump' };
+          if (jump > maxJump) return { delta: 0, reset: true, reason: 'jump' };
           return { delta: jump, reset: false };
         }
         // next < prev：可能回绕，也可能清零
         const wrapDelta = maxWrap - prev + next + 1;
-        if (wrapDelta <= (opts.maxJump ?? 1000)) return { delta: wrapDelta, reset: false, wrapped: true };
+        if (wrapDelta <= maxJump) return { delta: wrapDelta, reset: false, wrapped: true };
+        // 回退幅度巨大 → 解析错误，不是清零
+        if (prev - next > maxResetDrop) {
+          return { delta: 0, reset: true, reason: 'implausible-drop', drop: prev - next };
+        }
         return { delta: 0, reset: true, reason: 'reset' };
       }
 
-      Object.assign(__m, { CANDIDATE_FORMATS, readUint, toHex, GC_MAGIC, GC_VERSION, GC_TYPE, parseGenCounter, buildGenCounterCommand, learnFromSamples, isMappingUsable, parseWithMapping, parseFrame, parseHeuristic, diffCount });
+      Object.assign(__m, { CANDIDATE_FORMATS, readUint, toHex, GC_MAGIC, GC_VERSION, GC_TYPE, parseGenCounter, buildGenCounterCommand, FRAME_HEADER_3C, CMD_3C_COUNT, classify3c, parse3c, learnFromSamples, isMappingUsable, parseWithMapping, parseFrame, parseHeuristic, diffCount });
 
     }).call(undefined);
   };
@@ -2730,6 +2997,8 @@ details.acc .acc-body { padding-bottom: 12px; }
         const RAPID_GAP = 120;       // 帧间隔小于 120ms 视为「机器速度」（人手极限约 5~6 次/秒）
         const BURST_LEN = 3;         // 连续 3 帧机器速度 → 判定为倒灌
         const BURST_SILENCE = 2000;  // 倒灌中静默 2 秒视为结束
+        /** 单帧可接受的最大增量：超过就是解析错误，不入账 */
+        const SANE_DELTA = 5000;
 
         function setConfig(patch) {
           Object.assign(cfg, patch);
@@ -2925,8 +3194,25 @@ details.acc .acc-body { padding-bottom: 12px; }
 
           /* ---- 正常增量 ---- */
           const prev = lastAbs;
-          const { delta, reset, reason } = diffCount(prev, count, { maxJump: 2000 });
+          const { delta, reset, reason, drop } = diffCount(prev, count, { maxJump: 2000 });
           lastAbs = count;
+
+          /* ---- 异常跳变防护 ----
+           * 真机上出现过「心跳帧被当成计数」→ 10 亿级假增量 → 下一帧回落被误判清零。
+           * 现在帧型过滤挡住了源头，这里再加一层保险：单次增量超过 SANE_DELTA 一律
+           * 不入账，只记日志。宁可漏记一次按键，也不能污染整个账本。
+           */
+          if (!reset && delta > SANE_DELTA) {
+            emit('ble:resync', { reason: 'sanity-capped', from: delta, to: 0 });
+            return;
+          }
+
+          if (reset && reason === 'implausible-drop') {
+            // 回退幅度不可能来自人工清零，只能来自解析错误：静默对齐，不报警不计数
+            emit('ble:resync', { reason: 'implausible-drop', drop });
+            pendingFirstPress = false;
+            return;
+          }
 
           if (delta > 0) {
             let n = delta;
@@ -4656,7 +4942,7 @@ details.acc .acc-body { padding-bottom: 12px; }
        * 功课管理 / 提醒与提示 / 显示 / 数据与隐私。
        */
       const { h, clear, toast } = __import("src/ui/dom.js");
-      const { getPractices, getAllPractices, addPractice, updatePractice, archivePractice, restorePractice, movePractice, getSettings, updateSettings } = __import("src/lib/model.js");
+      const { getPractices, getAllPractices, addPractice, updatePractice, archivePractice, restorePractice, movePractice, getSettings, updateSettings, scanAnomalies, repairAnomalies } = __import("src/lib/model.js");
       const { formatNumber } = __import("src/lib/progress.js");
       const { on } = __import("src/lib/bus.js");
       function renderSettings(root, ctx) {
@@ -4754,6 +5040,50 @@ details.acc .acc-body { padding-bottom: 12px; }
               e.target.value = '';
             },
           });
+
+          /* ---------- 异常记录修复 ---------- */
+          // 先只读扫描，把「检测到几条、分别是哪天、差多少」摆出来，
+          // 让用户看清再动手 —— 直接给个按钮就改数据，是不负责任的。
+          const anomalies = scanAnomalies();
+          const repairCard = h('div', { class: 'card stack' },
+            h('h2', null, '异常记录修复'),
+            anomalies.length
+              ? h('div', { class: 'note warn' },
+                  `检测到 ${anomalies.length} 条异常记录。可能是旧版本解析错误造成的（心跳帧被当成计数，`
+                  + '出现了十亿级别的假数字）。修复会把无法还原的数值归零，请在统计页核对后手动补录。')
+              : h('div', { class: 'note ok' },
+                  '未检测到异常记录，数据正常。'),
+          );
+
+          if (anomalies.length) {
+            const preview = h('div', { class: 'list', style: { maxHeight: '14rem', overflowY: 'auto' } });
+            const names = new Map(getAllPractices().map((p) => [p.id, p.name]));
+            for (const { log, issues } of anomalies.slice(0, 20)) {
+              preview.append(h('div', { class: 'list-item' },
+                h('div', { class: 'grow' },
+                  h('div', { class: 't' }, `${log.date} · ${names.get(log.practiceId) || '已归档'}`),
+                  h('div', { class: 'd' }, issues.map((i) => `${i.field}=${i.value}（${i.reason}）`).join('，'))),
+              ));
+            }
+            if (anomalies.length > 20) {
+              preview.append(h('p', { class: 'muted', style: { fontSize: '.8rem', margin: 0 } },
+                `…另有 ${anomalies.length - 20} 条未显示`));
+            }
+            repairCard.append(preview);
+            repairCard.append(h('div', { class: 'note info' },
+              '修复前建议先点「导出备份」存一份当前数据。修复不可撤销，但原始数据仍在备份文件里。'));
+            repairCard.append(h('button', {
+              class: 'block danger',
+              onclick: () => {
+                if (!confirm(`将修复 ${anomalies.length} 条异常记录，异常的数值会被归零。\n\n建议先导出备份。确定继续？`)) return;
+                const r = ctx.repairAnomalies();
+                toast(r.fixed.length ? `已修复 ${r.fixed.length} 条异常记录` : '没有需要修复的记录');
+                paint();
+              },
+            }, `一键修复 ${anomalies.length} 条异常记录`));
+          }
+
+          box.append(repairCard);
 
           box.append(h('div', { class: 'card stack' },
             h('h2', null, '数据与隐私'),
@@ -4968,7 +5298,7 @@ details.acc .acc-body { padding-bottom: 12px; }
       const { createBle, SUPPORTED } = __import("src/lib/ble.js");
       const { createProbe } = __import("src/lib/probe.js");
       const { createEngine } = __import("src/lib/engine.js");
-      const { setActivePractice, getPractice, getSettings, getAllPractices, getLogs, findPracticeByNfc } = __import("src/lib/model.js");
+      const { setActivePractice, getPractice, getSettings, getAllPractices, getLogs, findPracticeByNfc, repairAnomalies } = __import("src/lib/model.js");
       const { startScan: startNfcScan, nfcSupported } = __import("src/lib/nfc.js");
       const { read, write } = __import("src/lib/store.js");
       const { backupNow, doImport, wipe } = __import("src/ui/device-sdk.js");
@@ -5025,6 +5355,7 @@ details.acc .acc-body { padding-bottom: 12px; }
         bleDelta: () => engine.state.bleTotal,
         backup: backupNow,
         wipe,
+        repairAnomalies,
         async importFile(file) {
           const summary = await doImport(file, { merge: true });
           return summary;
