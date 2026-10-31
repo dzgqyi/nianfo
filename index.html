@@ -603,7 +603,7 @@ details.acc .acc-body { padding-bottom: 12px; }
   </div>
 
   <script>
-/* open-nianfo-counter — built 2026-10-31T11:25:33.473Z */
+/* open-nianfo-counter — built 2026-10-31T11:35:11.691Z */
 (function () {
   'use strict';
   var __defs = {};
@@ -722,7 +722,7 @@ details.acc .acc-body { padding-bottom: 12px; }
        * 发布新版本时这里和 package.json 要同步改（tests/version.test.js 会校验两者一致），
        * 界面上（标题栏、说明页）都会带上它，免得用户手里的 exe 究竟是哪个版本搞不清。
        */
-      const APP_VERSION = '0.3.3';
+      const APP_VERSION = '0.3.4';
 
       Object.assign(__m, { APP_VERSION });
 
@@ -3785,34 +3785,56 @@ details.acc .acc-body { padding-bottom: 12px; }
 
         const res = await apiFetch(creds, url);
         if (res.status === 404) return { exists: false };
-        if (!res.ok) throw new Error(`拉取失败（${res.status}）`);
+
+        /* ---- Gitee 的「路径不存在」不一定返回 404 ----
+         * 它会返回 200 + 仓库根目录列表（JSON 数组），或者 403/400。
+         * 这些都不是「文件存在但内容坏了」，必须区分清楚：
+         *   · 返回数组 / 无 sha → 文件确实不存在
+         *   · 有 sha → 文件存在，无论如何都要把 sha 带回去
+         */
+        if (!res.ok) {
+          // 没有可用内容时，也尽量不抛错：当成「远端没东西」让上层直接上传
+          if (res.status === 400 || res.status === 403) return { exists: false };
+          throw new Error(`拉取失败（${res.status}）`);
+        }
 
         const body = await res.json();
-
-        // Gitee 在路径不存在时可能返回数组（目录列表）或没有 content 字段
         if (!body || Array.isArray(body) || typeof body.content !== 'string' || !body.sha) {
           return { exists: false };
         }
 
+        /* 关键修复：只要拿到了 sha，就必须把它返回。
+         *
+         * 之前这里在「内容解析失败 / 不是本应用格式 / 文件为空」时返回
+         * { exists:false }，把 sha 一起丢了。上层于是当成「远端没有文件」去新建，
+         * 可 Gitee 那边文件明明在 —— 报「上传失败（400）：文件名已存在」。
+         *
+         * 正确语义：exists 表示「这个路径上有没有文件」，data 表示「内容可用吗」。
+         * 两者必须分开，否则就会出现「有文件却当作没有，然后新建失败」死循环。
+         */
+        const sha = body.sha;
         const text = fromBase64(body.content);
-        // 空文件 / 只有空白：当作没有内容，不报错
-        if (!text.trim()) return { exists: false };
+
+        if (!text.trim()) {
+          // 空文件：内容没有，但文件在，用它的 sha 直接覆盖写
+          return { exists: true, sha, data: null, size: 0, empty: true };
+        }
 
         try {
           const data = JSON.parse(text);
-          // 只认本应用的备份格式，别的东西一律视为「路径被占用了」
           if (!data || data.app !== 'open-nianfo-counter') {
             const size = text.length;
             if (size > 1024 * 1024) {
               throw new Error(`远端 ${creds.path} 被其他文件占用（${(size / 1024).toFixed(0)}KB），请在仓库里删掉它或换个文件名`);
             }
-            return { exists: false, foreign: true };
+            // 内容不是我们的，但文件在 → 带着 sha 覆盖它
+            return { exists: true, sha, data: null, size, foreign: true };
           }
-          return { exists: true, sha: body.sha, data, size: text.length, updatedAt: body.commit?.author?.date || null };
+          return { exists: true, sha, data, size: text.length, updatedAt: body.commit?.author?.date || null };
         } catch (err) {
           if (err.message && err.message.includes('被其他文件占用')) throw err;
-          // 解析不了：多半是 Gitee 返回的仓库默认内容，当成空仓库
-          return { exists: false, foreign: true };
+          // 解析不了（比如 Gitee 返回了 HTML）：文件在，带 sha 覆盖
+          return { exists: true, sha, data: null, size: text.length, foreign: true };
         }
       }
 
@@ -3856,6 +3878,24 @@ details.acc .acc-body { padding-bottom: 12px; }
 
         const first = creds.branch || 'main';
         let attempt = await doPush(first);
+
+        /* ---- 「文件名已存在」：我们以为在新建，其实文件在 ----
+         * 触发场景：拉取时没拿到 sha（比如远端文件很小或是空文件）。
+         * 处理：重新拉一次拿最新 sha（同时探测正确分支），再推。
+         */
+        const isNameExists = async (r) => {
+          if (r.status !== 400) return false;
+          const body = await r.clone().json().catch(() => ({}));
+          return /已存在|already exists|filename exists/i.test(String(body.message || ''));
+        };
+
+        if (await isNameExists(attempt.res)) {
+          const latest = await pullRemote(creds);
+          if (latest.exists && latest.sha) {
+            const body = { message: msg, content, branch: first, sha: latest.sha };
+            attempt = { res: await apiFetch(creds, url, { method, body: JSON.stringify(body) }), branch: first };
+          }
+        }
 
         // 冲突：远端已被别人改过，取最新 sha 再推一次
         if (attempt.res.status === 409 || attempt.res.status === 422) {
