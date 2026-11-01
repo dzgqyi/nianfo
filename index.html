@@ -302,6 +302,33 @@ input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-
   background: var(--accent);
   color: #fff;
 }
+/* 折叠态只有这一行，它就是「当前功课的标题条」而不是列表项：
+ * 名字居中才稳，左侧贴边会显得整块歪着。
+ *
+ * 用「左右等宽占位 + 中间名字」的三栏 grid，才是真的居中：
+ * 只写 text-align:center 的话，右侧还有「0 次 ▾」占着宽度，
+ * 名字会被挤得偏左，看着还是歪的。
+ */
+.practice-switch.is-collapsed .switch-row.active {
+  display: grid;
+  grid-template-columns: minmax(56px, 1fr) auto minmax(56px, 1fr);
+  column-gap: 8px;
+}
+.practice-switch.is-collapsed .switch-row.active .switch-name {
+  grid-column: 2;
+  justify-self: center;
+  text-align: center;
+  /* 名字本身可能很长，居中后两侧同时省略，不破坏居中 */
+  max-width: 100%;
+}
+/* 右栏放「计数 + 箭头」，整组靠右 */
+.practice-switch.is-collapsed .switch-row.active .switch-trail {
+  grid-column: 3;
+  justify-self: end;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
 .switch-name {
   flex: 1 1 auto;
   min-width: 0;
@@ -309,6 +336,13 @@ input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+/* 尾部（计数 + 箭头）不参与压缩，数字永远完整显示 */
+.switch-trail {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 .switch-count {
   flex: 0 0 auto;
@@ -736,7 +770,7 @@ details.acc .acc-body { padding-bottom: 12px; }
   </div>
 
   <script>
-/* open-nianfo-counter — built 2026-11-01T03:13:19.883Z */
+/* open-nianfo-counter — built 2026-11-01T03:26:02.553Z */
 (function () {
   'use strict';
   var __defs = {};
@@ -855,7 +889,7 @@ details.acc .acc-body { padding-bottom: 12px; }
        * 发布新版本时这里和 package.json 要同步改（tests/version.test.js 会校验两者一致），
        * 界面上（标题栏、说明页）都会带上它，免得用户手里的 exe 究竟是哪个版本搞不清。
        */
-      const APP_VERSION = '0.3.11';
+      const APP_VERSION = '0.3.12';
 
       Object.assign(__m, { APP_VERSION });
 
@@ -5075,6 +5109,8 @@ details.acc .acc-body { padding-bottom: 12px; }
 
         const paintStrip = () => {
           clear(strip);
+          // 折叠时这一行是「标题条」，用 CSS 做三栏居中；展开时是普通列表项，左对齐
+          strip.className = `practice-switch${expanded ? '' : ' is-collapsed'}`;
           for (const p of practices) {
             const active = p.id === practice.id;
             // 折叠时只留当前这条
@@ -5095,11 +5131,13 @@ details.acc .acc-body { padding-bottom: 12px; }
               'aria-expanded': active && practices.length > 1 ? String(expanded) : undefined,
             },
               h('span', { class: 'switch-name' }, p.name),
-              h('span', { class: 'switch-count' },
-                `${formatNumber(todayCount(p.id))} ${p.unit || '次'}`),
-              active && practices.length > 1
-                ? h('span', { class: 'switch-caret', 'aria-hidden': 'true' }, expanded ? '▴' : '▾')
-                : null,
+              // 计数 + 箭头打包成一块「尾部」，折叠态整体贴右，名字才能真居中
+              h('span', { class: 'switch-trail' },
+                h('span', { class: 'switch-count' }, `${formatNumber(todayCount(p.id))} ${p.unit || '次'}`),
+                active && practices.length > 1
+                  ? h('span', { class: 'switch-caret', 'aria-hidden': 'true' }, expanded ? '▴' : '▾')
+                  : null,
+              ),
             );
             strip.append(row);
           }
