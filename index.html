@@ -603,7 +603,7 @@ details.acc .acc-body { padding-bottom: 12px; }
   </div>
 
   <script>
-/* open-nianfo-counter — built 2026-10-31T15:46:11.265Z */
+/* open-nianfo-counter — built 2026-10-31T16:11:47.778Z */
 (function () {
   'use strict';
   var __defs = {};
@@ -722,7 +722,7 @@ details.acc .acc-body { padding-bottom: 12px; }
        * 发布新版本时这里和 package.json 要同步改（tests/version.test.js 会校验两者一致），
        * 界面上（标题栏、说明页）都会带上它，免得用户手里的 exe 究竟是哪个版本搞不清。
        */
-      const APP_VERSION = '0.3.8';
+      const APP_VERSION = '0.3.9';
 
       Object.assign(__m, { APP_VERSION });
 
@@ -1708,6 +1708,12 @@ details.acc .acc-body { padding-bottom: 12px; }
       }
 
       /**
+       * 占位功课名：首次打开自动预置的「功课 1/2/3」，用户没改过名就是空壳。
+       * 多端同步时两端的空壳必须并成一条，否则越同步功课越多。
+       */
+      const PLACEHOLDER_NAME_RE = /^功课\s*\d+$/;
+
+      /**
        * 合并两批功课：同名（归一化后）合并为一条，保留本机那条的 id。
        * 返回 { list, remap }，remap 是 远端 id → 本机 id 的映射。
        *
@@ -1722,13 +1728,51 @@ details.acc .acc-body { padding-bottom: 12px; }
           if (!byName.has(key)) byName.set(key, p.id);
         }
 
-        const remap = new Map();
+        // 本机已有的空功课（名字还是「功课 N」）：
+        // 远端那些同名的空壳应该并进来，而不是各占一行。
+        // 不做这个，两端各预置的「功课 2/3」会一路叠加，
+        // 越同步功课越多（这是用户实际遇到的「电脑端 9 门」）。
+        // 只按名字判定，不看有无记录 —— 有记录的空壳由「清理空功课」单独处理，
+        // 这里合并到同一条不会丢任何数据（记录按 id 重映射）。
+        //
+        // 口径：同一个浏览器里也可能残留多个空壳（旧版本反复预置造成），
+        // 这里先把它们就地并成一条，再让远端空壳并过来。
+        const localPlaceholders = local.filter((p) => PLACEHOLDER_NAME_RE.test(String(p.name || '').trim()));
+        let placeholderTwin = localPlaceholders.length ? localPlaceholders[0].id : null;
+        const localRemap = new Map();
+        if (localPlaceholders.length > 1) {
+          const keep = localPlaceholders[0];
+          for (const extra of localPlaceholders.slice(1)) {
+            byId.delete(extra.id);
+            localRemap.set(extra.id, keep.id);
+            // byName 里指向被删空壳的键也要改指到保留的那条，
+            // 否则后面「功课 3」会查到一个已不存在的 id，又新建一条出来
+            byName.set(normalizePracticeName(extra.name), keep.id);
+          }
+        }
+
+        const remap = new Map(localRemap);
         let merged = 0;
 
         for (const p of incoming || []) {
           const cur = byId.get(p.id);
           const key = normalizePracticeName(p.name);
-          const twinId = cur ? cur.id : byName.get(key);
+          const isPh = PLACEHOLDER_NAME_RE.test(String(p.name || '').trim());
+
+          // 占位名优先：只要本机已有空壳，远端所有「功课 N」都并进那一条。
+          // 必须先判占位名再判 id —— 两端预置的空壳 id 不同但语义相同，
+          // 若先按 id 直通就会各留一份（这就是「功课 2/3/4/5/6」的来源）。
+          let twinId;
+          if (isPh && placeholderTwin) {
+            // 占位名一律归到那唯一一条空壳上，不再看 byName / byId
+            twinId = placeholderTwin;
+          } else {
+            twinId = cur ? cur.id : byName.get(key);
+          }
+          if (!twinId && isPh) {
+            // 本机还没有空壳：这条留下当空壳，后续空壳都并到它这里
+            placeholderTwin = p.id;
+          }
           const target = twinId ? byId.get(twinId) : null;
           const targetId = target ? target.id : p.id;
 
@@ -1738,6 +1782,9 @@ details.acc .acc-body { padding-bottom: 12px; }
             merged++;
           }
           if (!byName.has(key)) byName.set(key, targetId);
+          // 被并到占位功课上的空壳，把自己的名字键也指过去，
+          // 免得后续同名条目查不到再新建一条
+          if (isPh && placeholderTwin && targetId === placeholderTwin) byName.set(key, placeholderTwin);
         }
 
         return { list: [...byId.values()], remap, merged, count: (incoming || []).length };
@@ -2439,6 +2486,59 @@ details.acc .acc-body { padding-bottom: 12px; }
         return { merged: mergedCount, groups: groups.length, logs: logsMoved };
       }
 
+      /**
+       * 扫描「占位功课」= 名字还是默认的「功课 N」、且没有任何计数记录。
+       *
+       * 这些是新手引导留下的空壳：本应用首次打开会自动预置「功课 1/2/3」，
+       * 用户改成自己的功课后，剩下的空壳仍在列表里；再经过一次多端同步，
+       * 电脑端和手机端各自预置的空壳按 id 合并后叠加，
+       * 就出现「手机 5 门、电脑 9 门，其中一堆是功课 2/3/4/5/6」的怪象。
+       *
+       * 只清「名字没改过 + 一条记录都没有」的，改过名或有过记录的绝不碰。
+       */
+      const PLACEHOLDER_RE = /^功课\s*\d+$/;
+
+      function scanPlaceholders() {
+        const s = ensureCache();
+        const used = new Set(s.logs.map((l) => l.practiceId).concat(s.sessions.map((x) => x.practiceId)));
+        const alive = s.practices.filter((p) => !p.archived);
+        return alive.filter((p) => PLACEHOLDER_RE.test(String(p.name || '').trim()) && !used.has(p.id));
+      }
+      /**
+       * 清理占位功课。
+       * 但要留一个：如果清完一门功课都不剩，留着最后一条（避免界面空白无从下手）。
+       */
+      function removePlaceholders() {
+        const s = ensureCache();
+        const targets = scanPlaceholders();
+        if (!targets.length) return { removed: 0 };
+
+        const aliveCount = s.practices.filter((p) => !p.archived).length;
+        // 全空且列表全是占位符时保留一条，不然用户连「改哪门功课」都没得点
+        const keepOne = targets.length >= aliveCount ? targets[targets.length - 1] : null;
+
+        let removed = 0;
+        for (const p of targets) {
+          if (keepOne && p.id === keepOne.id) continue;
+          p.archived = true;
+          removed++;
+        }
+
+        write('practices', s.practices);
+        const active = s.settings.activePracticeId;
+        if (active && !s.practices.find((p) => p.id === active && !p.archived)) {
+          const first = s.practices.find((p) => !p.archived);
+          if (first) {
+            s.settings.activePracticeId = first.id;
+            write('settings', s.settings);
+            emit('settings:changed', s.settings);
+            emit('practice:active', first.id);
+          }
+        }
+        emit('practices:changed', s.practices);
+        return { removed, kept: keepOne ? 1 : 0 };
+      }
+
       /** 归档而非物理删除：历史记录仍可查阅、可撤销 */
       function archivePractice(id) {
         updatePractice(id, { archived: true });
@@ -2602,7 +2702,7 @@ details.acc .acc-body { padding-bottom: 12px; }
       }
 
 
-      Object.assign(__m, { SCHEMA, DEFAULT_SETTINGS, newId, _resetCacheForTest, invalidateCache, getSettings, getPractices, getAllPractices, getLogs, getSessions, scanAnomalies, repairAnomalies, getPractice, getActivePractice, findPracticeByNfc, getLog, todayCount, updateSettings, setActivePractice, addPractice, updatePractice, scanDuplicatePractices, mergeDuplicatePractices, archivePractice, restorePractice, movePractice, addCount, setTodayCount, recordRound, addSeconds, statsForPractice, totalsForPractice, overallTotals, pushSession });
+      Object.assign(__m, { SCHEMA, DEFAULT_SETTINGS, newId, _resetCacheForTest, invalidateCache, getSettings, getPractices, getAllPractices, getLogs, getSessions, scanAnomalies, repairAnomalies, getPractice, getActivePractice, findPracticeByNfc, getLog, todayCount, updateSettings, setActivePractice, addPractice, updatePractice, scanDuplicatePractices, mergeDuplicatePractices, scanPlaceholders, removePlaceholders, archivePractice, restorePractice, movePractice, addCount, setTodayCount, recordRound, addSeconds, statsForPractice, totalsForPractice, overallTotals, pushSession });
 
     }).call(undefined);
   };
@@ -5804,7 +5904,7 @@ details.acc .acc-body { padding-bottom: 12px; }
        * 功课管理 / 提醒与提示 / 显示 / 数据与隐私。
        */
       const { h, clear, toast } = __import("src/ui/dom.js");
-      const { getPractices, getAllPractices, addPractice, updatePractice, archivePractice, restorePractice, movePractice, getSettings, updateSettings, scanAnomalies, repairAnomalies, scanDuplicatePractices, mergeDuplicatePractices } = __import("src/lib/model.js");
+      const { getPractices, getAllPractices, addPractice, updatePractice, archivePractice, restorePractice, movePractice, getSettings, updateSettings, scanAnomalies, repairAnomalies, scanDuplicatePractices, mergeDuplicatePractices, scanPlaceholders, removePlaceholders } = __import("src/lib/model.js");
       const { formatNumber } = __import("src/lib/progress.js");
       const { on } = __import("src/lib/bus.js");
       function renderSettings(root, ctx) {
@@ -5937,6 +6037,39 @@ details.acc .acc-body { padding-bottom: 12px; }
             }, `合并 ${dupGroups.length} 组重名功课`));
           }
           box.append(dupCard);
+
+          /* ---------- 清理空功课 ---------- */
+          // 首次打开会自动预置「功课 1/2/3」当占位，用户改名后剩下的空壳仍留着；
+          // 多端同步时两端各自的空壳按 id 叠加，就变成「手机 5 门、电脑 9 门，
+          // 一堆叫功课 2/3/4/5/6 的」。这里给个显式清理入口。
+          const placeholders = scanPlaceholders();
+          const phCard = h('div', { class: 'card stack' }, h('h2', null, '清理空功课'));
+          if (!placeholders.length) {
+            phCard.append(h('div', { class: 'note ok' }, '没有多余的空功课。'));
+          } else {
+            phCard.append(h('div', { class: 'note warn' },
+              `检测到 ${placeholders.length} 门空功课（名字仍是「功课 N」，且从未有过计数记录）。`
+              + '清理后只是归档，可在「已归档」里恢复；改过名或有记录的功课不会被清理。'));
+            const phPreview = h('div', { class: 'list', style: { maxHeight: '10rem', overflowY: 'auto' } });
+            for (const p of placeholders) {
+              phPreview.append(h('div', { class: 'list-item' },
+                h('div', { class: 'grow' },
+                  h('div', { class: 't' }, p.name),
+                  h('div', { class: 'd' }, `目标 ${formatNumber(p.goal)} ${p.unit} · 无记录`)),
+              ));
+            }
+            phCard.append(phPreview);
+            phCard.append(h('button', {
+              class: 'block danger',
+              onclick: () => {
+                if (!confirm(`将清理 ${placeholders.length} 门空功课（归档，可恢复）。\n\n确定继续？`)) return;
+                const r = removePlaceholders();
+                toast(`已清理 ${r.removed} 门空功课`);
+                paint();
+              },
+            }, `清理 ${placeholders.length} 门空功课`));
+          }
+          box.append(phCard);
 
           /* ---------- 异常记录修复 ---------- */
           // 先只读扫描，把「检测到几条、分别是哪天、差多少」摆出来，
