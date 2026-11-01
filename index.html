@@ -770,7 +770,7 @@ details.acc .acc-body { padding-bottom: 12px; }
   </div>
 
   <script>
-/* open-nianfo-counter — built 2026-11-01T04:43:28.164Z */
+/* open-nianfo-counter — built 2026-11-01T05:05:49.978Z */
 (function () {
   'use strict';
   var __defs = {};
@@ -889,7 +889,7 @@ details.acc .acc-body { padding-bottom: 12px; }
        * 发布新版本时这里和 package.json 要同步改（tests/version.test.js 会校验两者一致），
        * 界面上（标题栏、说明页）都会带上它，免得用户手里的 exe 究竟是哪个版本搞不清。
        */
-      const APP_VERSION = '0.3.15';
+      const APP_VERSION = '0.3.16';
 
       Object.assign(__m, { APP_VERSION });
 
@@ -2014,16 +2014,16 @@ details.acc .acc-body { padding-bottom: 12px; }
           const target = twinId ? byId.get(twinId) : null;
           const targetId = target ? target.id : p.id;
 
-          // ---- 同一条记录（id 相同）时，谁的新听谁的 ----
-          // 不看新旧会出现「拉一次名字变一个」：手机改成「雨宝陀罗尼」，
-          // 电脑端那条还叫「功课 6」，两边轮流把它改回去。
+          // ---- 同一条记录（id 相同）时，听谁的？ ----
           //
-          // 判断顺序：
-          //   1) 两边都有 updatedAt → 比时间；
-          //   2) 都没有（老数据）→ 「功课 N」这种系统名视为更旧，具体名优先。
-          //      理由：用户几乎不可能把一门有名字的功课改回「功课 7」，
-          //      而「改名从未同步过去」的情况很常见。
-          //   3) 分不出来 → 保留本机，不动总比乱改强。
+          // 优先级（高→低），按顺序判断，先命中先定：
+          //   ① 一边是「功课 N」默认名、另一边是正经名字 → 一律取正经名字。
+          //      这条不看时间。原因：用户几乎不可能主动把「雨宝陀罗尼」改回
+          //      「功课 6」，而「改了名没同步过去」极其常见。
+          //      若按时间判，电脑端只要点过一次同步（刷新了 updatedAt），
+          //      就会用旧名字把手机端的新名字盖回去，来回拉扯、永远同步不完。
+          //   ② 两边都有 updatedAt → 取较新的一次修改（改目标、改单位等）。
+          //   ③ 分不出来 → 保留本机，不动总比乱改强。
           const sameRecord = !!target;
           const localAt = Number(target?.updatedAt || 0);
           const incomingAt = Number(p.updatedAt || 0);
@@ -2033,12 +2033,14 @@ details.acc .acc-body { padding-bottom: 12px; }
           let incomingWins;
           if (!sameRecord) {
             incomingWins = true;
-          } else if (incomingAt > 0 && localAt > 0) {
-            incomingWins = incomingAt > localAt;
           } else if (localIsDefaultName !== incomingIsDefaultName) {
-            // 一边是「功课 N」、一边有正经名字 → 要那个正经名字
+            // 规则①：有名字的一方胜，不管谁是本机、谁更新
             incomingWins = localIsDefaultName;
+          } else if (incomingAt > 0 && localAt > 0) {
+            // 规则②
+            incomingWins = incomingAt > localAt;
           } else {
+            // 规则③
             incomingWins = false;
           }
 
@@ -4727,6 +4729,11 @@ details.acc .acc-body { padding-bottom: 12px; }
       /**
        * 完整同步：拉 → 合并 → 推。
        * @param {{ pushOnly?: boolean, silent?: boolean }} opts
+       *
+       * pushOnly = 不拉、不合并，直接把本机数据覆盖到远端。
+       * 用途：两端已拉扯成一团乱麻时（A 改成新名、B 又用旧名盖回去），
+       * 在一台「数据是对的」的设备上强制推一次，让远端变成干净状态，
+       * 另一台再拉一次就统一了。
        */
       async function syncNow(opts = {}) {
         if (running) return { skipped: true, reason: 'busy' };
@@ -4738,12 +4745,14 @@ details.acc .acc-body { padding-bottom: 12px; }
         running = true;
         const meta = loadMeta();
         try {
-          setStatus({ state: 'syncing', message: '正在同步…' });
+          setStatus({ state: 'syncing', message: opts.pushOnly ? '正在上传本机数据…' : '正在同步…' });
 
-          // 1) 拉
+          // 1) 拉。
+          //    强制上传时也拉一次——只为拿 sha，否则更新远端文件会报「文件已存在」；
+          //    但拿到后不合并，直接丢弃内容。
           const remote = await pullRemote(creds);
           let pulled = 0;
-          if (remote.exists && remote.data) {
+          if (!opts.pushOnly && remote.exists && remote.data) {
             const summary = await applyRemoteToLocal(remote.data);
             pulled = summary?.logs || 0;
             // 关键：importAll 直接写 localStorage，绕过了 model 层。
@@ -4752,14 +4761,14 @@ details.acc .acc-body { padding-bottom: 12px; }
             if (pulled || summary?.practices) invalidateCache();
           }
 
-          // 2) 推（内容没变就跳过，省 commit）
+          // 2) 推（正常模式内容没变就跳过；强制上传则一律推）
           const payload = exportAll();
           const fp = fingerprint(payload);
           let pushed = false;
-          if (fp !== meta.lastFingerprint || !remote.exists) {
+          if (opts.pushOnly || fp !== meta.lastFingerprint || !remote.exists) {
             const up = await pushRemote(creds, payload, {
               sha: remote.exists ? remote.sha : null,
-              message: `念佛计数器同步 ${new Date().toLocaleString('zh-CN')}`,
+              message: `念佛计数器${opts.pushOnly ? '强制上传' : '同步'} ${new Date().toLocaleString('zh-CN')}`,
             });
             // 上传时若发现分支名不对（Gitee 老仓库是 master），把新分支名记住，
             // 下次就不用再试错一轮
@@ -4774,7 +4783,9 @@ details.acc .acc-body { padding-bottom: 12px; }
 
           setStatus({
             state: 'ok',
-            message: pushed ? `已同步（拉取 ${pulled} 条，已上传）` : '已是最新',
+            message: opts.pushOnly
+              ? '已用本机数据覆盖云端'
+              : (pushed ? `已同步（拉取 ${pulled} 条，已上传）` : '已是最新'),
             lastSyncAt: Date.now(),
           });
           return { ok: true, pulled, pushed };
@@ -6663,6 +6674,29 @@ details.acc .acc-body { padding-bottom: 12px; }
           }, '立即同步');
 
           card.append(syncBtn);
+          // 强制上传：两端数据打结时的救命按钮。
+          // 典型场景：A 设备改了名，B 设备一直是旧名字，两边互相覆盖永远同步不完。
+          // 在「数据是对的」那台设备上点一下，把云端覆盖成本机数据，另一台再拉就干净了。
+          card.append(h('button', {
+            class: 'block ghost small',
+            onclick: async () => {
+              if (!confirm(
+                '【强制上传】会把你这台设备的数据直接覆盖云端文件。\n\n'
+                + '⚠ 另一台设备上「还没同步过来」的改动会被丢掉。\n'
+                + '建议先在两台设备上都导出一次备份再操作。\n\n'
+                + '什么时候该用它：两端功课名字/排列长期对不上、怎么同步都改不过来时，\n'
+                + '在「数据是正确的那台」上点这个按钮。\n\n确定继续？'
+              )) return;
+              syncBtn.disabled = true;
+              syncBtn.textContent = '上传中…';
+              const r = await ctx.sync.syncNow({ pushOnly: true });
+              syncBtn.disabled = false;
+              syncBtn.textContent = '立即同步';
+              if (r.ok) toast('已用本机数据覆盖云端，请到另一台设备点「立即同步」');
+              else if (r.error) alert('上传失败：' + r.error);
+              paint();
+            },
+          }, '强制上传（用本机覆盖云端）'));
           card.append(h('div', { class: 'row' },
             h('button', {
               class: 'block ghost',
