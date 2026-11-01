@@ -770,7 +770,7 @@ details.acc .acc-body { padding-bottom: 12px; }
   </div>
 
   <script>
-/* open-nianfo-counter — built 2026-11-01T04:28:43.205Z */
+/* open-nianfo-counter — built 2026-11-01T04:43:28.164Z */
 (function () {
   'use strict';
   var __defs = {};
@@ -889,7 +889,7 @@ details.acc .acc-body { padding-bottom: 12px; }
        * 发布新版本时这里和 package.json 要同步改（tests/version.test.js 会校验两者一致），
        * 界面上（标题栏、说明页）都会带上它，免得用户手里的 exe 究竟是哪个版本搞不清。
        */
-      const APP_VERSION = '0.3.14';
+      const APP_VERSION = '0.3.15';
 
       Object.assign(__m, { APP_VERSION });
 
@@ -1890,6 +1890,11 @@ details.acc .acc-body { padding-bottom: 12px; }
           && Number(p?.goal) === FACTORY_GOAL;
       }
 
+      /** 名字是不是系统默认的「功课 N」（不看记录，纯看名字） */
+      function isDefaultName(name) {
+        return PLACEHOLDER_NAME_RE.test(String(name || '').trim());
+      }
+
       /**
        * 是否把这条当成「系统预置的空壳」处理（同步合并时用）。
        *
@@ -1966,33 +1971,38 @@ details.acc .acc-body { padding-bottom: 12px; }
         for (const p of incoming || []) {
           const cur = byId.get(p.id);
           const key = normalizePracticeName(p.name);
-          const isPh = isPlaceholder(p);
 
-          // ---- 空壳的处理规则（三种情况）----
-          //   A. 本机已有可复用的空壳 → 并进去（多端不同 id 的空壳归一成一条）
-          //   B. 本机没有空壳，但已有真实功课 → 丢弃，不新增
-          //      （手机上 5 门都改了名，电脑端那个「功课 6」不该在手机上冒出来）
-          //   C. 本机一门真实功课都没有（全新安装）→ 本机那个闲置空壳要被顶替掉：
-          //      第一条远端数据（不论是不是空壳）就占用它的位置，避免
-          //      「同步后变成 功课 1 + 真实功课 两条」。
+          // ---- 空壳的处理规则 ----
+          // ⚠ 最关键的一条：**按 id 命中的，永远不算空壳**。
+          //   id 相同 = 同一门功课在两端的同一条记录，只是名字可能不一样。
+          //   真实场景：电脑端那条原本叫「功课 6」，用户在手机上把它改名成
+          //   「雨宝陀罗尼」。手机同步上来的是同一 id + 新名字。
+          //   若这时还按「本机这条叫功课 N」判成空壳去丢弃，
+          //   用户刚改的名字就被同步吞掉了（v0.3.14 真实踩的坑）。
+          const isSameRecord = !!cur;
+          const isPh = isPlaceholder(p) && !isSameRecord;
+
           if (isPh) {
-            if (placeholderTwin) {
+            // A. 本机已有空壳 → 并进去
+            if (placeholderTwin && placeholderTwin !== p.id) {
               remap.set(p.id, placeholderTwin);
               merged++;
               if (!byName.has(key)) byName.set(key, placeholderTwin);
               continue;
             }
+            // B. 本机没有空壳但已有真实功课 → 丢弃，不新增
             if (localHasReal) {
               merged++;
               continue;
             }
+            // C. 本机一门真实功课都没有 → 由它占住空壳的位置
             placeholderTwin = p.id;
           }
 
-          // 规则 C 的落点：本机一门真实功课都没有时，第一条进来就顶替那个空壳
+          // 规则 C 的落点：本机一门真实功课都没有时，第一条进来的真实功课顶替那个空壳
           if (!localHasReal && !localShellSwapped && !isPh) {
-            const stale = local.find((x) => !x.archived && isPlaceholder(x));
-            if (stale && stale.id !== p.id) {
+            const stale = local.find((x) => !x.archived && isPlaceholder(x) && x.id !== p.id);
+            if (stale) {
               byId.delete(stale.id);
               localRemap.set(stale.id, p.id);
               remap.set(stale.id, p.id);
@@ -2004,12 +2014,49 @@ details.acc .acc-body { padding-bottom: 12px; }
           const target = twinId ? byId.get(twinId) : null;
           const targetId = target ? target.id : p.id;
 
-          byId.set(targetId, { ...(target || p), ...p, id: targetId });
+          // ---- 同一条记录（id 相同）时，谁的新听谁的 ----
+          // 不看新旧会出现「拉一次名字变一个」：手机改成「雨宝陀罗尼」，
+          // 电脑端那条还叫「功课 6」，两边轮流把它改回去。
+          //
+          // 判断顺序：
+          //   1) 两边都有 updatedAt → 比时间；
+          //   2) 都没有（老数据）→ 「功课 N」这种系统名视为更旧，具体名优先。
+          //      理由：用户几乎不可能把一门有名字的功课改回「功课 7」，
+          //      而「改名从未同步过去」的情况很常见。
+          //   3) 分不出来 → 保留本机，不动总比乱改强。
+          const sameRecord = !!target;
+          const localAt = Number(target?.updatedAt || 0);
+          const incomingAt = Number(p.updatedAt || 0);
+          const localIsDefaultName = isDefaultName(target?.name);
+          const incomingIsDefaultName = isDefaultName(p?.name);
+
+          let incomingWins;
+          if (!sameRecord) {
+            incomingWins = true;
+          } else if (incomingAt > 0 && localAt > 0) {
+            incomingWins = incomingAt > localAt;
+          } else if (localIsDefaultName !== incomingIsDefaultName) {
+            // 一边是「功课 N」、一边有正经名字 → 要那个正经名字
+            incomingWins = localIsDefaultName;
+          } else {
+            incomingWins = false;
+          }
+
+          if (incomingWins) {
+            byId.set(targetId, { ...(target || p), ...p, id: targetId });
+          } else if (sameRecord) {
+            byId.set(targetId, { ...p, ...target, id: targetId });
+          }
+
           if (p.id !== targetId) {
             remap.set(p.id, targetId);
             merged++;
           }
+          // 名字键要同时登记「远端带来的名字」和「合并后实际的名字」两种写法，
+          // 否则下一条同名功课会找不到目标、又新建一条
           if (!byName.has(key)) byName.set(key, targetId);
+          const mergedName = normalizePracticeName(byId.get(targetId)?.name);
+          if (mergedName && !byName.has(mergedName)) byName.set(mergedName, targetId);
           if (!isPh) localHasReal = true;
         }
 
@@ -2606,7 +2653,9 @@ details.acc .acc-body { padding-bottom: 12px; }
         const s = ensureCache();
         const i = s.practices.findIndex((p) => p.id === id);
         if (i < 0) return null;
-        s.practices[i] = { ...s.practices[i], ...patch, id };
+        // 记下修改时间：多端同步时用它判断「哪一端的改动更新」。
+        // 没有这个字段时，电脑端会用旧名字覆盖手机上刚改的新名字。
+        s.practices[i] = { ...s.practices[i], ...patch, id, updatedAt: nowMs() };
         write('practices', s.practices);
         emit('practices:changed', s.practices);
         return s.practices[i];
