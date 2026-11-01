@@ -770,7 +770,7 @@ details.acc .acc-body { padding-bottom: 12px; }
   </div>
 
   <script>
-/* open-nianfo-counter — built 2026-11-01T05:05:49.978Z */
+/* open-nianfo-counter — built 2026-11-01T07:10:53.131Z */
 (function () {
   'use strict';
   var __defs = {};
@@ -889,7 +889,7 @@ details.acc .acc-body { padding-bottom: 12px; }
        * 发布新版本时这里和 package.json 要同步改（tests/version.test.js 会校验两者一致），
        * 界面上（标题栏、说明页）都会带上它，免得用户手里的 exe 究竟是哪个版本搞不清。
        */
-      const APP_VERSION = '0.3.16';
+      const APP_VERSION = '0.3.17';
 
       Object.assign(__m, { APP_VERSION });
 
@@ -4208,7 +4208,7 @@ details.acc .acc-body { padding-bottom: 12px; }
        *   就等于没有自动同步。Gitee 国内直连，把这个问题从根上解决。
        *
        * 数据形态：
-       *   仓库里存一个 JSON 文件（默认 onc-backup.json），内容就是 exportAll() 的结果。
+       *   仓库里存一个 JSON 文件（默认 data.json），内容就是 exportAll() 的结果。
        *   不做「服务端合并」——托管平台只是个文件柜。合并发生在上传前的本地：
        *   先用 remote 的旧内容算增量，再生成新的合并结果覆盖上去。
        *
@@ -4221,6 +4221,16 @@ details.acc .acc-body { padding-bottom: 12px; }
        *   4) Gitee 的 API 形状与 GitHub 不同（见 PROVIDERS），不能只换域名。
        */
       const { importAll } = __import("src/lib/store.js");
+      /**
+       * 云端备份文件的默认路径。
+       *
+       * 历史上默认值改过一次（onc-backup.json → data.json），
+       * 结果老用户新建仓库时按新习惯建了 data.json，程序却去读 onc-backup.json，
+       * 表现为「同步成功但数据不对、功课列表还是旧的」。
+       * 现在统一成一个常量，UI 的预填值和兜底值都用它，避免再漂移。
+       */
+      const DEFAULT_SYNC_PATH = 'data.json';
+
       /* ---------------- 服务商定义 ---------------- */
 
       /**
@@ -4641,7 +4651,7 @@ details.acc .acc-body { padding-bottom: 12px; }
         return `${s.length}:${h}`;
       }
 
-      Object.assign(__m, { PROVIDERS, loadCreds, saveCreds, loadMeta, saveMeta, verifyCreds, pullRemote, pushRemote, applyRemoteToLocal, fingerprint });
+      Object.assign(__m, { DEFAULT_SYNC_PATH, PROVIDERS, loadCreds, saveCreds, loadMeta, saveMeta, verifyCreds, pullRemote, pushRemote, applyRemoteToLocal, fingerprint });
 
     }).call(undefined);
   };
@@ -4668,7 +4678,7 @@ details.acc .acc-body { padding-bottom: 12px; }
        *    自动同步只在「页面可见 + 有凭据 + 距上次超过 N 秒」时触发；
        *    用户点「立即同步」则强制走一次完整流程。
        */
-      const { loadCreds, saveCreds, loadMeta, saveMeta, verifyCreds, pullRemote, pushRemote, applyRemoteToLocal, fingerprint } = __import("src/lib/ghsync.js");
+      const { loadCreds, saveCreds, loadMeta, saveMeta, verifyCreds, pullRemote, pushRemote, applyRemoteToLocal, fingerprint, DEFAULT_SYNC_PATH } = __import("src/lib/ghsync.js");
       const { exportAll } = __import("src/lib/store.js");
       const { invalidateCache } = __import("src/lib/model.js");
       const { emit, on } = __import("src/lib/bus.js");
@@ -4707,7 +4717,7 @@ details.acc .acc-body { padding-bottom: 12px; }
           token: creds.token.trim(),
           owner: creds.owner.trim(),
           repo: creds.repo.trim(),
-          path: (creds.path || 'onc-backup.json').trim(),
+          path: (creds.path || DEFAULT_SYNC_PATH).trim(),
           branch: creds.branch || info.defaultBranch || 'main',
         };
         saveCreds(next);
@@ -6321,6 +6331,7 @@ details.acc .acc-body { padding-bottom: 12px; }
       const { h, clear, toast } = __import("src/ui/dom.js");
       const { getPractices, getAllPractices, addPractice, updatePractice, archivePractice, restorePractice, movePractice, getSettings, updateSettings, scanAnomalies, repairAnomalies, scanDuplicatePractices, mergeDuplicatePractices, scanPlaceholders, removePlaceholders, QUIET_DAYS } = __import("src/lib/model.js");
       const { formatNumber } = __import("src/lib/progress.js");
+      const { DEFAULT_SYNC_PATH } = __import("src/lib/ghsync.js");
       const { on } = __import("src/lib/bus.js");
       function renderSettings(root, ctx) {
         const box = h('div', { class: 'stack' });
@@ -6697,6 +6708,17 @@ details.acc .acc-body { padding-bottom: 12px; }
               paint();
             },
           }, '强制上传（用本机覆盖云端）'));
+
+          // 同步配置之外，如果本机还留着「功课 6」这类残留空壳，直接在这里提醒。
+          // 用户换过云端文件名（onc-backup.json → data.json）后，旧文件里的空壳
+          // 会被并进本地，同步并不会把它删掉 —— 只能靠清理。
+          const staleShells = scanPlaceholders();
+          if (staleShells.length) {
+            card.append(h('div', { class: 'note warn', style: { marginTop: '4px' } },
+              `本机还有 ${staleShells.length} 门空功课（${staleShells.map((p) => p.name).join('、')}），`
+              + '它们也会被同步到云端。建议先在上方「清理空功课」里处理掉，再点同步。'));
+          }
+
           card.append(h('div', { class: 'row' },
             h('button', {
               class: 'block ghost',
@@ -6749,7 +6771,7 @@ details.acc .acc-body { padding-bottom: 12px; }
           });
           const ownerInput = h('input', { type: 'text', placeholder: `你的 ${p.label} 用户名（或个人空间地址）` });
           const repoInput = h('input', { type: 'text', placeholder: '仓库名，例如 nianfo-data' });
-          const pathInput = h('input', { type: 'text', value: 'onc-backup.json' });
+          const pathInput = h('input', { type: 'text', value: DEFAULT_SYNC_PATH });
 
           const connectBtn = h('button', {
             class: 'block primary',
@@ -6763,7 +6785,7 @@ details.acc .acc-body { padding-bottom: 12px; }
               try {
                 const info = await ctx.sync.configure({
                   provider: p.id, token, owner, repo,
-                  path: pathInput.value.trim() || 'onc-backup.json',
+                  path: pathInput.value.trim() || DEFAULT_SYNC_PATH,
                 });
                 toast(`已连接 ${info.repo}`);
                 paint();
