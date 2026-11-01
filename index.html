@@ -770,7 +770,7 @@ details.acc .acc-body { padding-bottom: 12px; }
   </div>
 
   <script>
-/* open-nianfo-counter — built 2026-11-01T03:26:02.553Z */
+/* open-nianfo-counter — built 2026-11-01T04:28:43.205Z */
 (function () {
   'use strict';
   var __defs = {};
@@ -889,7 +889,7 @@ details.acc .acc-body { padding-bottom: 12px; }
        * 发布新版本时这里和 package.json 要同步改（tests/version.test.js 会校验两者一致），
        * 界面上（标题栏、说明页）都会带上它，免得用户手里的 exe 究竟是哪个版本搞不清。
        */
-      const APP_VERSION = '0.3.12';
+      const APP_VERSION = '0.3.14';
 
       Object.assign(__m, { APP_VERSION });
 
@@ -1879,6 +1879,30 @@ details.acc .acc-body { padding-bottom: 12px; }
        * 多端同步时两端的空壳必须并成一条，否则越同步功课越多。
        */
       const PLACEHOLDER_NAME_RE = /^功课\s*\d+$/;
+      /** 出厂参数：只有名字、单位、目标都没被改过，才可能是空壳 */
+      const FACTORY_UNIT = '次';
+      const FACTORY_GOAL = 108;
+
+      /** 是否是「用户没动过」的系统预置空壳（还要配合「无记录」一起判断） */
+      function looksFactoryDefault(p) {
+        return PLACEHOLDER_NAME_RE.test(String(p?.name || '').trim())
+          && String(p?.unit || '') === FACTORY_UNIT
+          && Number(p?.goal) === FACTORY_GOAL;
+      }
+
+      /**
+       * 是否把这条当成「系统预置的空壳」处理（同步合并时用）。
+       *
+       * 判据是「名字就是功课 N」+「从头到尾没有任何计数记录」。
+       * 不要求单位/目标仍是出厂值：用户可能改过目标却始终没念过，
+       * 那依然是个没用的壳，同步时不该在另一台设备上冒出来。
+       *
+       * 反过来，只要念过一次，就说明这是真实功课，绝不合并、绝不丢弃
+       * —— 这一条是硬约束，v0.3.9~0.3.12 曾因忽略它而吞掉过用户的功课。
+       */
+      function looksLikeShell(p, usedIds) {
+        return PLACEHOLDER_NAME_RE.test(String(p?.name || '').trim()) && !usedIds.has(p?.id);
+      }
 
       /**
        * 合并两批功课：同名（归一化后）合并为一条，保留本机那条的 id。
@@ -1887,7 +1911,17 @@ details.acc .acc-body { padding-bottom: 12px; }
        * 抽成独立函数，是为了让「同步导入」和「一键去重」共用同一套规则，
        * 避免两处逻辑漂移后出现「导入能合并、去重不能」这种怪事。
        */
-      function mergePractices(local, incoming) {
+      /**
+       * 合并两批功课：同名（归一化后）合并为一条，保留本机那条的 id。
+       * 返回 { list, remap }，remap 是 远端 id → 本机 id 的映射。
+       *
+       * @param {Array} local     本机功课
+       * @param {Array} incoming  导入/拉取来的功课
+       * @param {{ logs?: Array, incomingLogs?: Array }} [opts]
+       *        用于识别「真正在用」的功课。不传则退化为「只看名字」，
+       *        那样名叫「功课 N」的真实功课会被误当空壳合并。
+       */
+      function mergePractices(local, incoming, opts = {}) {
         const byId = new Map(local.map((p) => [p.id, { ...p }]));
         const byName = new Map();
         for (const p of local) {
@@ -1895,16 +1929,19 @@ details.acc .acc-body { padding-bottom: 12px; }
           if (!byName.has(key)) byName.set(key, p.id);
         }
 
-        // 本机已有的空功课（名字还是「功课 N」）：
-        // 远端那些同名的空壳应该并进来，而不是各占一行。
-        // 不做这个，两端各预置的「功课 2/3」会一路叠加，
-        // 越同步功课越多（这是用户实际遇到的「电脑端 9 门」）。
-        // 只按名字判定，不看有无记录 —— 有记录的空壳由「清理空功课」单独处理，
-        // 这里合并到同一条不会丢任何数据（记录按 id 重映射）。
+        // ⚠ 空壳识别三条件，缺一不可：
+        //   ① 名字是「功课 N」；② 单位/目标还是出厂值；③ 两端都没有任何计数。
         //
-        // 口径：同一个浏览器里也可能残留多个空壳（旧版本反复预置造成），
-        // 这里先把它们就地并成一条，再让远端空壳并过来。
-        const localPlaceholders = local.filter((p) => PLACEHOLDER_NAME_RE.test(String(p.name || '').trim()));
+        // 只看名字会出人命：用户真把一门功课命名成「功课 6」并天天在用，
+        // 会被当空壳吞掉（v0.3.9~v0.3.12 的 bug：手机 5 门、电脑 4 门）。
+        const usedIds = new Set();
+        for (const l of opts.logs || []) if ((l.count || 0) > 0) usedIds.add(l.practiceId);
+        for (const l of opts.incomingLogs || []) if ((l.count || 0) > 0) usedIds.add(l.practiceId);
+
+        const isPlaceholder = (p) => looksLikeShell(p, usedIds);
+
+        // 本机已有空壳：远端那些空壳应该并进来，而不是各占一行。
+        const localPlaceholders = local.filter(isPlaceholder);
         let placeholderTwin = localPlaceholders.length ? localPlaceholders[0].id : null;
         const localRemap = new Map();
         if (localPlaceholders.length > 1) {
@@ -1921,25 +1958,49 @@ details.acc .acc-body { padding-bottom: 12px; }
         const remap = new Map(localRemap);
         let merged = 0;
 
+        // 本机有没有可能装的「空壳」：本机为空 / 本机功课还没被用户"改造"过
+        let localHasReal = local.some((p) => !p.archived && !isPlaceholder(p));
+        // 全新安装时本机的闲置空壳只顶替一次，后续远端空壳仍走「丢弃」逻辑
+        let localShellSwapped = false;
+
         for (const p of incoming || []) {
           const cur = byId.get(p.id);
           const key = normalizePracticeName(p.name);
-          const isPh = PLACEHOLDER_NAME_RE.test(String(p.name || '').trim());
+          const isPh = isPlaceholder(p);
 
-          // 占位名优先：只要本机已有空壳，远端所有「功课 N」都并进那一条。
-          // 必须先判占位名再判 id —— 两端预置的空壳 id 不同但语义相同，
-          // 若先按 id 直通就会各留一份（这就是「功课 2/3/4/5/6」的来源）。
-          let twinId;
-          if (isPh && placeholderTwin) {
-            // 占位名一律归到那唯一一条空壳上，不再看 byName / byId
-            twinId = placeholderTwin;
-          } else {
-            twinId = cur ? cur.id : byName.get(key);
-          }
-          if (!twinId && isPh) {
-            // 本机还没有空壳：这条留下当空壳，后续空壳都并到它这里
+          // ---- 空壳的处理规则（三种情况）----
+          //   A. 本机已有可复用的空壳 → 并进去（多端不同 id 的空壳归一成一条）
+          //   B. 本机没有空壳，但已有真实功课 → 丢弃，不新增
+          //      （手机上 5 门都改了名，电脑端那个「功课 6」不该在手机上冒出来）
+          //   C. 本机一门真实功课都没有（全新安装）→ 本机那个闲置空壳要被顶替掉：
+          //      第一条远端数据（不论是不是空壳）就占用它的位置，避免
+          //      「同步后变成 功课 1 + 真实功课 两条」。
+          if (isPh) {
+            if (placeholderTwin) {
+              remap.set(p.id, placeholderTwin);
+              merged++;
+              if (!byName.has(key)) byName.set(key, placeholderTwin);
+              continue;
+            }
+            if (localHasReal) {
+              merged++;
+              continue;
+            }
             placeholderTwin = p.id;
           }
+
+          // 规则 C 的落点：本机一门真实功课都没有时，第一条进来就顶替那个空壳
+          if (!localHasReal && !localShellSwapped && !isPh) {
+            const stale = local.find((x) => !x.archived && isPlaceholder(x));
+            if (stale && stale.id !== p.id) {
+              byId.delete(stale.id);
+              localRemap.set(stale.id, p.id);
+              remap.set(stale.id, p.id);
+            }
+            localShellSwapped = true;
+          }
+
+          const twinId = cur ? cur.id : byName.get(key);
           const target = twinId ? byId.get(twinId) : null;
           const targetId = target ? target.id : p.id;
 
@@ -1949,9 +2010,7 @@ details.acc .acc-body { padding-bottom: 12px; }
             merged++;
           }
           if (!byName.has(key)) byName.set(key, targetId);
-          // 被并到占位功课上的空壳，把自己的名字键也指过去，
-          // 免得后续同名条目查不到再新建一条
-          if (isPh && placeholderTwin && targetId === placeholderTwin) byName.set(key, placeholderTwin);
+          if (!isPh) localHasReal = true;
         }
 
         return { list: [...byId.values()], remap, merged, count: (incoming || []).length };
@@ -1983,10 +2042,14 @@ details.acc .acc-body { padding-bottom: 12px; }
           for (const [name, v] of keep) localStorage.setItem(key(name), v);
         }
 
-        // 功课列表：按 id 合并；同名（归一化后）并入本机同名功课，保留本机 id
+        // 功课列表：按 id 合并；同名（归一化后）并入本机同名功课，保留本机 id。
+        // 传入两边的日志，让合并逻辑能分辨「真在用的功课 6」和「系统预置的空壳」
         if (Array.isArray(incoming.practices)) {
           const local = read('practices', []);
-          const r = mergePractices(local, incoming.practices);
+          const r = mergePractices(local, incoming.practices, {
+            logs: read('logs', []),
+            incomingLogs: Array.isArray(incoming.logs) ? incoming.logs : [],
+          });
           write('practices', r.list);
           for (const [from, to] of r.remap) idRemap.set(from, to);
           summary.practices = r.count;
@@ -1997,6 +2060,15 @@ details.acc .acc-body { padding-bottom: 12px; }
         if (incoming.settings) {
           const s = { ...incoming.settings };
           if (s.activePracticeId && idRemap.size) s.activePracticeId = idRemap.get(s.activePracticeId) || s.activePracticeId;
+          // 当前功课指向的那条若已不在列表里（比如是个被丢弃的空壳），
+          // 改指向第一门真实功课；不改的话首页会显示「还没有功课」。
+          if (s.activePracticeId) {
+            const alive = read('practices', []).filter((p) => !p.archived);
+            if (!alive.some((p) => p.id === s.activePracticeId)) {
+              const first = alive.find((p) => !looksFactoryDefault(p)) || alive[0];
+              if (first) s.activePracticeId = first.id;
+            }
+          }
           write('settings', s);
           summary.settings = 1;
         }
@@ -2654,22 +2726,99 @@ details.acc .acc-body { padding-bottom: 12px; }
       }
 
       /**
-       * 扫描「占位功课」= 名字还是默认的「功课 N」、且没有任何计数记录。
+       * 识别「系统预置的空壳功课」。
        *
-       * 这些是新手引导留下的空壳：本应用首次打开会自动预置「功课 1/2/3」，
-       * 用户改成自己的功课后，剩下的空壳仍在列表里；再经过一次多端同步，
-       * 电脑端和手机端各自预置的空壳按 id 合并后叠加，
-       * 就出现「手机 5 门、电脑 9 门，其中一堆是功课 2/3/4/5/6」的怪象。
+       * 背景：应用首次打开会自动预置「功课 1/2/3」，用户把它们改名成自己的功课后，
+       * 那些没被改的空壳就留了下来。多端同步时，两端各自的空壳（id 不同、名字相同）
+       * 会一路叠加，出现「手机 5 门、电脑 9 门」。
        *
-       * 只清「名字没改过 + 一条记录都没有」的，改过名或有过记录的绝不碰。
+       * 判定必须同时满足，缺一不可：
+       *   1) 名字就是系统默认的「功课 N」（用户没改过名）；
+       *   2) 参数还是出厂值（单位「次」、目标 108）——用户哪怕只改了目标也算动过；
+       *   3) 最近 QUIET_DAYS 天内没有任何计数记录。
+       *
+       * 为什么第 3 条要用「最近 N 天」而不是「从来没记录」：
+       * 用户今天刚建的功课、或今天还没开始念的那门，当天在界面上就是空白。
+       * 按「从未记录」判会立刻建议清理，像是在催人删掉正在用的功课。
+       * 反过来，一门两周没碰、名字没改、参数没动的功课，几乎可以肯定是空壳。
        */
       const PLACEHOLDER_RE = /^功课\s*\d+$/;
 
+      /** 系统预置功课的出厂参数，用于判断「用户有没有动过」 */
+      const FACTORY_UNIT = '次';
+      const FACTORY_GOAL = 108;
+
+      /** 多久没念过才认为「可以清理」：两周。太短会误伤偶尔才做的功课 */
+      const QUIET_DAYS = 14;
+
+      function ymd(d) {
+        const p = (n) => String(n).padStart(2, '0');
+        return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+      }
+
+      /** 返回 cutoff 日期字符串（含）：早于这一天的记录算「很久以前」 */
+      function quietCutoff(days = QUIET_DAYS) {
+        const d = new Date();
+        d.setDate(d.getDate() - days);
+        return ymd(d);
+      }
+
+      /** 名字、单位、目标都还是出厂状态 —— 用户没动过它 */
+      function looksFactoryDefault(p) {
+        return PLACEHOLDER_RE.test(String(p?.name || '').trim())
+          && String(p?.unit || '') === FACTORY_UNIT
+          && Number(p?.goal) === FACTORY_GOAL;
+      }
+
+      /**
+       * 清理建议的判据：只看「名字是功课 N」+「近两周没记录」。
+       * 这里不要求出厂参数 —— 清理是用户主动确认的操作，宽松一点无妨，
+       * 而且能覆盖「改过目标但一直没念」的空壳。
+       * 同步合并（store.js）用的是更严的判据，因为那是自动的、不该误伤。
+       */
+      function looksLikeShell(p) {
+        return PLACEHOLDER_RE.test(String(p?.name || '').trim());
+      }
+
       function scanPlaceholders() {
         const s = ensureCache();
-        const used = new Set(s.logs.map((l) => l.practiceId).concat(s.sessions.map((x) => x.practiceId)));
+        const cutoff = quietCutoff();
+        // 只统计「最近 QUIET_DAYS 天内」的记录；更早的记录不参与判断，
+        // 因为一门很久没念的功课，历史记录再多也已经不用了
+        const recentlyUsed = new Set();
+        for (const l of s.logs) {
+          if ((l.count || 0) > 0 && String(l.date || '') >= cutoff) recentlyUsed.add(l.practiceId);
+        }
+        for (const x of s.sessions) {
+          const t = x.startedAt || x.at || 0;
+          if (t && ymd(new Date(t)) >= cutoff) recentlyUsed.add(x.practiceId);
+        }
+
         const alive = s.practices.filter((p) => !p.archived);
-        return alive.filter((p) => PLACEHOLDER_RE.test(String(p.name || '').trim()) && !used.has(p.id));
+        return alive
+          .filter((p) => looksLikeShell(p) && !recentlyUsed.has(p.id))
+          // ⚠ 必须返回 s.practices 里的原对象，不能 {...p} 复制：
+          // removePlaceholders 直接改 p.archived 来归档，改副本不会写回数组，
+          // 清理会变成「显示已清理、实际什么都没做」的空操作。
+          // lastDate 用不可枚举属性附加，JSON.stringify 会跳过它，不会污染存盘数据。
+          .map((p) => {
+            Object.defineProperty(p, 'lastDate', {
+              value: lastRecordDate(s.logs, p.id), enumerable: false, configurable: true, writable: true,
+            });
+            return p;
+          });
+      }
+
+      /** 找到某门功课最后一次有计数的日期（用于界面显示「最后记录：…」） */
+      function lastRecordDate(logs, practiceId) {
+        let last = '';
+        for (const l of logs) {
+          if (l.practiceId === practiceId && (l.count || 0) > 0) {
+            const d = String(l.date || '');
+            if (d > last) last = d;
+          }
+        }
+        return last;
       }
       /**
        * 清理占位功课。
@@ -2681,8 +2830,9 @@ details.acc .acc-body { padding-bottom: 12px; }
         if (!targets.length) return { removed: 0 };
 
         const aliveCount = s.practices.filter((p) => !p.archived).length;
-        // 全空且列表全是占位符时保留一条，不然用户连「改哪门功课」都没得点
-        const keepOne = targets.length >= aliveCount ? targets[targets.length - 1] : null;
+        // 若「清理后一门都不剩」，就保留最后一条 —— 界面全空用户无从下手
+        const wouldEmpty = targets.length >= aliveCount;
+        const keepOne = wouldEmpty ? targets[targets.length - 1] : null;
 
         let removed = 0;
         for (const p of targets) {
@@ -2869,7 +3019,7 @@ details.acc .acc-body { padding-bottom: 12px; }
       }
 
 
-      Object.assign(__m, { SCHEMA, DEFAULT_SETTINGS, newId, _resetCacheForTest, invalidateCache, getSettings, getPractices, getAllPractices, getLogs, getSessions, scanAnomalies, repairAnomalies, getPractice, getActivePractice, findPracticeByNfc, getLog, todayCount, updateSettings, setActivePractice, addPractice, updatePractice, scanDuplicatePractices, mergeDuplicatePractices, scanPlaceholders, removePlaceholders, archivePractice, restorePractice, movePractice, addCount, setTodayCount, recordRound, addSeconds, statsForPractice, totalsForPractice, overallTotals, pushSession });
+      Object.assign(__m, { SCHEMA, DEFAULT_SETTINGS, newId, _resetCacheForTest, invalidateCache, getSettings, getPractices, getAllPractices, getLogs, getSessions, scanAnomalies, repairAnomalies, getPractice, getActivePractice, findPracticeByNfc, getLog, todayCount, updateSettings, setActivePractice, addPractice, updatePractice, scanDuplicatePractices, mergeDuplicatePractices, QUIET_DAYS, looksFactoryDefault, scanPlaceholders, removePlaceholders, archivePractice, restorePractice, movePractice, addCount, setTodayCount, recordRound, addSeconds, statsForPractice, totalsForPractice, overallTotals, pushSession });
 
     }).call(undefined);
   };
@@ -6109,7 +6259,7 @@ details.acc .acc-body { padding-bottom: 12px; }
        * 功课管理 / 提醒与提示 / 显示 / 数据与隐私。
        */
       const { h, clear, toast } = __import("src/ui/dom.js");
-      const { getPractices, getAllPractices, addPractice, updatePractice, archivePractice, restorePractice, movePractice, getSettings, updateSettings, scanAnomalies, repairAnomalies, scanDuplicatePractices, mergeDuplicatePractices, scanPlaceholders, removePlaceholders } = __import("src/lib/model.js");
+      const { getPractices, getAllPractices, addPractice, updatePractice, archivePractice, restorePractice, movePractice, getSettings, updateSettings, scanAnomalies, repairAnomalies, scanDuplicatePractices, mergeDuplicatePractices, scanPlaceholders, removePlaceholders, QUIET_DAYS } = __import("src/lib/model.js");
       const { formatNumber } = __import("src/lib/progress.js");
       const { on } = __import("src/lib/bus.js");
       function renderSettings(root, ctx) {
@@ -6260,20 +6410,28 @@ details.acc .acc-body { padding-bottom: 12px; }
           // 首次打开会自动预置「功课 1/2/3」当占位，用户改名后剩下的空壳仍留着；
           // 多端同步时两端各自的空壳按 id 叠加，就变成「手机 5 门、电脑 9 门，
           // 一堆叫功课 2/3/4/5/6 的」。这里给个显式清理入口。
+          //
+          // 判定放宽到「两周内没有记录」：只按「一条记录都没有」判，
+          // 用户今天刚建的功课、或者今天还没念的那门，当天就会跳出来要清理，
+          // 看着像要把正在用的东西删掉。
           const placeholders = scanPlaceholders();
           const phCard = h('div', { class: 'card stack' }, h('h2', null, '清理空功课'));
           if (!placeholders.length) {
-            phCard.append(h('div', { class: 'note ok' }, '没有多余的空功课。'));
+            phCard.append(h('div', { class: 'note ok' },
+              `没有多余的空功课（名字仍是「功课 N」且近 ${QUIET_DAYS} 天没有任何记录的，才会出现在这里）。`));
           } else {
             phCard.append(h('div', { class: 'note warn' },
-              `检测到 ${placeholders.length} 门空功课（名字仍是「功课 N」，且从未有过计数记录）。`
-              + '清理后只是归档，可在「已归档」里恢复；改过名或有记录的功课不会被清理。'));
+              `检测到 ${placeholders.length} 门空功课：名字仍是「功课 N」，且近 ${QUIET_DAYS} 天没有任何计数记录。`
+              + '清理只是归档，可在「已归档」里恢复；改过名的、近期念过的功课都不会被清理。'));
             const phPreview = h('div', { class: 'list', style: { maxHeight: '10rem', overflowY: 'auto' } });
             for (const p of placeholders) {
               phPreview.append(h('div', { class: 'list-item' },
                 h('div', { class: 'grow' },
                   h('div', { class: 't' }, p.name),
-                  h('div', { class: 'd' }, `目标 ${formatNumber(p.goal)} ${p.unit} · 无记录`)),
+                  h('div', { class: 'd' },
+                    p.lastDate
+                      ? `最后记录 ${p.lastDate} · 目标 ${formatNumber(p.goal)} ${p.unit}`
+                      : `从未使用 · 目标 ${formatNumber(p.goal)} ${p.unit}`)),
               ));
             }
             phCard.append(phPreview);
