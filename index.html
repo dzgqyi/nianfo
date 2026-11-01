@@ -264,6 +264,75 @@ input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-
 .list-item .t { font-weight: 600; }
 .list-item .d { font-size: .78rem; color: var(--fg-soft); font-variant-numeric: tabular-nums; }
 
+/* ---------- 功课行（设置页·一个功课一行） ----------
+ * 整行只有三块：可点的主体 + 上移 + 下移。
+ * 上移/下移做成 44px 见方的方块（触屏最小可点尺寸），
+ * 比原来的小圆按钮好按，也不会让文字被挤成两行。
+ */
+.practice-list { display: flex; flex-direction: column; gap: 8px; }
+.practice-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 10px 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg);
+}
+.practice-row.active { border-color: var(--accent); background: var(--accent-soft); }
+.practice-main {
+  flex: 1 1 auto;
+  min-width: 0;              /* 关键：否则长名字会把行撑破、挤掉右侧按钮 */
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  align-items: flex-start;
+  text-align: left;
+  background: none;
+  border: 0;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.practice-name {
+  font-weight: 600;
+  line-height: 1.3;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;       /* 名字再长也只占一行，不换行不撑高 */
+}
+.practice-meta {
+  font-size: .78rem;
+  color: var(--fg-soft);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+.move-btn {
+  flex: 0 0 auto;
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  font-size: 1.05rem;
+  line-height: 1;
+  color: var(--fg-soft);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.move-btn:active { background: var(--accent-soft); border-color: var(--accent); }
+@media (hover: hover) {
+  .move-btn:hover { border-color: var(--accent); color: var(--accent); }
+}
+
 /* ---------- 日志 ---------- */
 .log {
   font-family: var(--mono);
@@ -603,7 +672,7 @@ details.acc .acc-body { padding-bottom: 12px; }
   </div>
 
   <script>
-/* open-nianfo-counter — built 2026-10-31T16:11:47.778Z */
+/* open-nianfo-counter — built 2026-11-01T02:12:49.218Z */
 (function () {
   'use strict';
   var __defs = {};
@@ -722,7 +791,7 @@ details.acc .acc-body { padding-bottom: 12px; }
        * 发布新版本时这里和 package.json 要同步改（tests/version.test.js 会校验两者一致），
        * 界面上（标题栏、说明页）都会带上它，免得用户手里的 exe 究竟是哪个版本搞不清。
        */
-      const APP_VERSION = '0.3.9';
+      const APP_VERSION = '0.3.10';
 
       Object.assign(__m, { APP_VERSION });
 
@@ -5924,15 +5993,28 @@ details.acc .acc-body { padding-bottom: 12px; }
           clear(box);
 
           /* ---------- 功课管理 ---------- */
-          const list = h('div', { class: 'list' });
+          // 一门功课一行：左侧名字+目标（点整行即编辑），右侧两个方形的上/下移按钮。
+          // 不用 .list-item 的默认 padding，是为了在手机上让一行更紧凑，
+          // 5~9 门功课能一屏看完，不至于要滑半天。
+          const list = h('div', { class: 'practice-list' });
           const practices = getPractices();
           for (const p of practices) {
-            list.append(h('div', { class: 'list-item' },
-              h('div', { class: 'grow', style: { cursor: 'pointer' }, onclick: () => editPractice(p) },
-                h('div', { class: 't' }, `${p.name}`),
-                h('div', { class: 'd' }, `目标 ${formatNumber(p.goal)} ${p.unit} · 每点 +${p.step}`)),
-              h('button', { class: 'small ghost', title: '上移', onclick: () => { movePractice(p.id, -1); paint(); } }, '↑'),
-              h('button', { class: 'small ghost', title: '下移', onclick: () => { movePractice(p.id, 1); paint(); } }, '↓'),
+            const isActive = getSettings().activePracticeId === p.id;
+            list.append(h('div', { class: `practice-row${isActive ? ' active' : ''}` },
+              h('button', {
+                class: 'practice-main', type: 'button', title: '点击编辑',
+                onclick: () => editPractice(p),
+              },
+                h('span', { class: 'practice-name' }, p.name),
+                h('span', { class: 'practice-meta' }, `目标 ${formatNumber(p.goal)} ${p.unit} · 每点 +${p.step}`)),
+              h('button', {
+                class: 'move-btn', type: 'button', title: '上移', 'aria-label': `${p.name} 上移`,
+                onclick: () => { movePractice(p.id, -1); paint(); },
+              }, '↑'),
+              h('button', {
+                class: 'move-btn', type: 'button', title: '下移', 'aria-label': `${p.name} 下移`,
+                onclick: () => { movePractice(p.id, 1); paint(); },
+              }, '↓'),
             ));
           }
 
