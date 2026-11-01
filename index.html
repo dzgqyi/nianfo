@@ -270,6 +270,70 @@ input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-
  * 比原来的小圆按钮好按，也不会让文字被挤成两行。
  */
 .practice-list { display: flex; flex-direction: column; gap: 8px; }
+
+/* ---------- 首页功课切换：一门一行 ----------
+ * 与设置页的功课行统一视觉语言：同样的圆角、同样的行高、同样的高亮色。
+ * 左侧名字单行省略，右侧今日计数用等宽数字，避免数字变化时整行抖动。
+ */
+.practice-switch {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+.switch-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 44px;
+  padding: 8px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--bg);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.switch-row.active {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+}
+.switch-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.switch-count {
+  flex: 0 0 auto;
+  font-size: .82rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg-soft);
+}
+.switch-row.active .switch-count { color: rgba(255, 255, 255, .85); }
+.switch-caret {
+  flex: 0 0 auto;
+  font-size: .7rem;
+  opacity: .8;
+  transition: transform .15s ease;
+}
+.switch-add {
+  align-self: flex-start;
+  padding: 6px 12px;
+  margin-top: 2px;
+  font-size: .8rem;
+  color: var(--fg-soft);
+  background: none;
+  border: 1px dashed var(--line);
+  border-radius: 10px;
+  cursor: pointer;
+}
 .practice-row {
   display: flex;
   align-items: center;
@@ -672,7 +736,7 @@ details.acc .acc-body { padding-bottom: 12px; }
   </div>
 
   <script>
-/* open-nianfo-counter — built 2026-11-01T02:12:49.218Z */
+/* open-nianfo-counter — built 2026-11-01T03:13:19.883Z */
 (function () {
   'use strict';
   var __defs = {};
@@ -791,7 +855,7 @@ details.acc .acc-body { padding-bottom: 12px; }
        * 发布新版本时这里和 package.json 要同步改（tests/version.test.js 会校验两者一致），
        * 界面上（标题栏、说明页）都会带上它，免得用户手里的 exe 究竟是哪个版本搞不清。
        */
-      const APP_VERSION = '0.3.10';
+      const APP_VERSION = '0.3.11';
 
       Object.assign(__m, { APP_VERSION });
 
@@ -4997,22 +5061,56 @@ details.acc .acc-body { padding-bottom: 12px; }
           return;
         }
 
-        /* ---------------- 顶部：功课切换 ---------------- */
-        const practiceStrip = h('div', { class: 'row wrap-row', style: { gap: '6px', marginBottom: '10px', overflowX: 'auto', paddingBottom: '2px' } });
+        /* ---------------- 顶部：功课切换 ----------------
+         * 原来是一排横着的胶囊按钮，功课一多就换行、宽度参差，看着乱也不好点。
+         *
+         * 现在：一门一行，但**默认折叠**——只显示当前功课那一行。
+         * 为什么折叠：5 门功课全展开要占掉将近半屏，把下面真正用来计数的大按钮
+         * 一路挤下去，单手够不着，这是计数器最不能忍的事。
+         * 点当前行 → 展开全部；选一条 → 自动收起。
+         */
+        const strip = h('div', { class: 'practice-switch' });
         const practices = getPractices();
-        for (const p of practices) {
-          const active = p.id === practice.id;
-          practiceStrip.append(h('button', {
-            class: `small ${active ? 'primary' : 'ghost'}`,
-            style: { flex: 'none' },
-            onclick: () => { setActivePractice(p.id); ctx.rerender(); },
-            title: `切换到《${p.name}》`,
-          }, p.name));
-        }
-        practiceStrip.append(h('button', {
-          class: 'small ghost', style: { flex: 'none' },
-          onclick: () => ctx.go('settings'), title: '管理功课',
-        }, '＋'));
+        let expanded = false;
+
+        const paintStrip = () => {
+          clear(strip);
+          for (const p of practices) {
+            const active = p.id === practice.id;
+            // 折叠时只留当前这条
+            if (!expanded && !active) continue;
+            const row = h('button', {
+              class: `switch-row${active ? ' active' : ''}`,
+              type: 'button',
+              onclick: () => {
+                if (active) {
+                  // 点当前那条 = 展开/收起
+                  if (practices.length > 1) { expanded = !expanded; paintStrip(); }
+                  return;
+                }
+                setActivePractice(p.id);
+                ctx.rerender();
+              },
+              title: active ? '点击展开功课列表' : `切换到《${p.name}》`,
+              'aria-expanded': active && practices.length > 1 ? String(expanded) : undefined,
+            },
+              h('span', { class: 'switch-name' }, p.name),
+              h('span', { class: 'switch-count' },
+                `${formatNumber(todayCount(p.id))} ${p.unit || '次'}`),
+              active && practices.length > 1
+                ? h('span', { class: 'switch-caret', 'aria-hidden': 'true' }, expanded ? '▴' : '▾')
+                : null,
+            );
+            strip.append(row);
+          }
+          if (expanded) {
+            strip.append(h('button', {
+              class: 'switch-add', type: 'button',
+              onclick: () => ctx.go('settings'), title: '管理功课',
+            }, '＋ 管理功课'));
+          }
+        };
+        paintStrip();
 
         /* ---------------- 计数器卡片 ---------------- */
         const nameEl = h('div', { class: 'name' }, practice.name);
@@ -5084,7 +5182,7 @@ details.acc .acc-body { padding-bottom: 12px; }
           deviceBar.append(h('button', { class: 'small ghost', onclick: () => ctx.go('device') }, '去连接'));
         }
 
-        root.append(practiceStrip, heroCard, deviceBar);
+        root.append(strip, heroCard, deviceBar);
 
         /* ---------------- 逻辑 ---------------- */
         function tap(ev, delta = null) {
