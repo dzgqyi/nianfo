@@ -279,16 +279,20 @@ input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-
   display: flex;
   flex-direction: column;
   gap: 6px;
-  /* 展开时功课行顶格左侧不好看，与设置页卡片内边距对齐：左右各空一个字 */
-  margin: 0 1em 12px;
+  /* 左右留白与下方计数卡片对齐：.wrap 自身左右各 14px、卡片内再 16px，
+   * 文字实际从 30px 起。切换条这里只留 14px 抵消 .wrap，行内再空一字，
+   * 名字起点就落在 30+16=46px，比卡片标题多空一个字的呼吸感，不贴边。 */
+  margin: 0 -14px 12px;
+  padding: 0 14px;
 }
-.switch-row {
+.practice-item {
   display: flex;
   align-items: center;
   gap: 10px;
   width: 100%;
   min-height: 44px;
-  padding: 8px 14px;
+  /* 右侧留白收窄，避免名字被挤短；左侧空一字，名字不再顶格 */
+  padding: 8px 12px 8px 1em;
   border: 1px solid var(--line);
   border-radius: 12px;
   background: var(--bg);
@@ -298,7 +302,7 @@ input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
 }
-.switch-row.active {
+.practice-item.active {
   border-color: var(--accent);
   background: var(--accent);
   color: #fff;
@@ -310,12 +314,12 @@ input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-
  * 只写 text-align:center 的话，右侧还有「0 次 ▾」占着宽度，
  * 名字会被挤得偏左，看着还是歪的。
  */
-.practice-switch.is-collapsed .switch-row.active {
+.practice-switch.is-collapsed .practice-item.active {
   display: grid;
   grid-template-columns: minmax(56px, 1fr) auto minmax(56px, 1fr);
   column-gap: 8px;
 }
-.practice-switch.is-collapsed .switch-row.active .switch-name {
+.practice-switch.is-collapsed .practice-item.active .item-name {
   grid-column: 2;
   justify-self: center;
   text-align: center;
@@ -323,14 +327,14 @@ input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-
   max-width: 100%;
 }
 /* 右栏放「计数 + 箭头」，整组靠右 */
-.practice-switch.is-collapsed .switch-row.active .switch-trail {
+.practice-switch.is-collapsed .practice-item.active .item-trail {
   grid-column: 3;
   justify-self: end;
   display: flex;
   align-items: center;
   gap: 6px;
 }
-.switch-name {
+.item-name {
   flex: 1 1 auto;
   min-width: 0;
   font-weight: 600;
@@ -339,20 +343,20 @@ input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-
   white-space: nowrap;
 }
 /* 尾部（计数 + 箭头）不参与压缩，数字永远完整显示 */
-.switch-trail {
+.item-trail {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
   gap: 6px;
 }
-.switch-count {
+.item-count {
   flex: 0 0 auto;
   font-size: .82rem;
   font-variant-numeric: tabular-nums;
   color: var(--fg-soft);
 }
-.switch-row.active .switch-count { color: rgba(255, 255, 255, .85); }
-.switch-caret {
+.practice-item.active .item-count { color: rgba(255, 255, 255, .85); }
+.item-caret {
   flex: 0 0 auto;
   font-size: .7rem;
   opacity: .8;
@@ -771,7 +775,7 @@ details.acc .acc-body { padding-bottom: 12px; }
   </div>
 
   <script>
-/* open-nianfo-counter — built 2026-11-02T10:16:46.634Z */
+/* open-nianfo-counter — built 2026-11-02T12:35:01.510Z */
 (function () {
   'use strict';
   var __defs = {};
@@ -5343,7 +5347,7 @@ details.acc .acc-body { padding-bottom: 12px; }
             // 折叠时只留当前这条
             if (!expanded && !active) continue;
             const row = h('button', {
-              class: `switch-row${active ? ' active' : ''}`,
+              class: `practice-item${active ? ' active' : ''}`,
               type: 'button',
               onclick: () => {
                 if (active) {
@@ -5359,12 +5363,12 @@ details.acc .acc-body { padding-bottom: 12px; }
               title: active ? '点击展开功课列表' : `切换到《${p.name}》`,
               'aria-expanded': active && practices.length > 1 ? String(expanded) : undefined,
             },
-              h('span', { class: 'switch-name' }, p.name),
+              h('span', { class: 'item-name' }, p.name),
               // 计数 + 箭头打包成一块「尾部」，折叠态整体贴右，名字才能真居中
-              h('span', { class: 'switch-trail' },
-                h('span', { class: 'switch-count' }, `${formatNumber(todayCount(p.id))} ${p.unit || '次'}`),
+              h('span', { class: 'item-trail' },
+                h('span', { class: 'item-count' }, `${formatNumber(todayCount(p.id))} ${p.unit || '次'}`),
                 active && practices.length > 1
-                  ? h('span', { class: 'switch-caret', 'aria-hidden': 'true' }, expanded ? '▴' : '▾')
+                  ? h('span', { class: 'item-caret', 'aria-hidden': 'true' }, expanded ? '▴' : '▾')
                   : null,
               ),
             );
