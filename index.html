@@ -279,7 +279,8 @@ input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-
   display: flex;
   flex-direction: column;
   gap: 6px;
-  margin-bottom: 12px;
+  /* 展开时功课行顶格左侧不好看，与设置页卡片内边距对齐：左右各空一个字 */
+  margin: 0 1em 12px;
 }
 .switch-row {
   display: flex;
@@ -770,7 +771,7 @@ details.acc .acc-body { padding-bottom: 12px; }
   </div>
 
   <script>
-/* open-nianfo-counter — built 2026-11-01T07:10:53.131Z */
+/* open-nianfo-counter — built 2026-11-02T10:16:46.634Z */
 (function () {
   'use strict';
   var __defs = {};
@@ -889,7 +890,7 @@ details.acc .acc-body { padding-bottom: 12px; }
        * 发布新版本时这里和 package.json 要同步改（tests/version.test.js 会校验两者一致），
        * 界面上（标题栏、说明页）都会带上它，免得用户手里的 exe 究竟是哪个版本搞不清。
        */
-      const APP_VERSION = '0.3.17';
+      const APP_VERSION = '0.3.18';
 
       Object.assign(__m, { APP_VERSION });
 
@@ -5307,8 +5308,9 @@ details.acc .acc-body { padding-bottom: 12px; }
         let bumpTimer = 0;
         const startedAt = Date.now();
 
-        const practice = getActivePractice();
-        if (!practice) {
+        // 只在初始化时判断「有没有功课」。之后一律用 getActivePractice() 现取，
+        // 不要把结果存成变量 —— 存下来的快照在切换功课后就过期了。
+        if (!getActivePractice()) {
           root.append(h('div', { class: 'card center' },
             h('p', null, '还没有功课。'),
             h('button', { class: 'primary', onclick: () => ctx.go('settings') }, '去添加功课')));
@@ -5331,8 +5333,13 @@ details.acc .acc-body { padding-bottom: 12px; }
           clear(strip);
           // 折叠时这一行是「标题条」，用 CSS 做三栏居中；展开时是普通列表项，左对齐
           strip.className = `practice-switch${expanded ? '' : ' is-collapsed'}`;
+          // ⚠ 每次重绘都重新取当前功课，不能用外层闭包里的 practice。
+          // 那个变量是页面初始化时的快照，切换功课后不会更新 ——
+          // 用它判断 active，会导致高亮落在旧功课上、点当前行判定失效，
+          // 表现就是「点了没反应 / 列表收不起来 / 计数像是记到了别的功课」。
+          const activeId = getActivePractice()?.id;
           for (const p of practices) {
-            const active = p.id === practice.id;
+            const active = p.id === activeId;
             // 折叠时只留当前这条
             if (!expanded && !active) continue;
             const row = h('button', {
@@ -5345,6 +5352,8 @@ details.acc .acc-body { padding-bottom: 12px; }
                   return;
                 }
                 setActivePractice(p.id);
+                // 展开状态下选完自动收起，下次进来是干净的折叠态
+                expanded = false;
                 ctx.rerender();
               },
               title: active ? '点击展开功课列表' : `切换到《${p.name}》`,
@@ -5371,9 +5380,11 @@ details.acc .acc-body { padding-bottom: 12px; }
         paintStrip();
 
         /* ---------------- 计数器卡片 ---------------- */
-        const nameEl = h('div', { class: 'name' }, practice.name);
-        const unitEl = h('span', { class: 'pill' }, `${practice.unit || '遍'} / 日`);
-        const countEl = h('div', { class: 'count-num' }, formatNumber(todayCount(practice.id)));
+        // 初始内容取当前功课；切换后由 paint() 实时刷新，这里只是首帧的占位
+        const initial = getActivePractice();
+        const nameEl = h('div', { class: 'name' }, initial.name);
+        const unitEl = h('span', { class: 'pill' }, `${initial.unit || '遍'} / 日`);
+        const countEl = h('div', { class: 'count-num' }, formatNumber(todayCount(initial.id)));
         const subEl = h('div', { class: 'count-sub' }, '');
         const barEl = h('span', { style: { width: '0%' } });
         // 注意：这一层必须是 0×0 的定位锚点，否则 ripple 的百分比/像素尺寸会被拉伸成圈痕
@@ -5382,7 +5393,7 @@ details.acc .acc-body { padding-bottom: 12px; }
         });
 
         const tapBtn = h('button', {
-          class: 'tap-area', 'aria-label': `点击计数，《${practice.name}》加 ${practice.step || 1}`,
+          class: 'tap-area', 'aria-label': `点击计数，《${initial.name}》加 ${initial.step || 1}`,
           onclick: (ev) => { unlockAudio(); tap(ev); },
         }, rippleLayer, h('div', { style: { position: 'relative', zIndex: 1, width: '100%' } }, countEl, subEl));
 
@@ -5494,6 +5505,18 @@ details.acc .acc-body { padding-bottom: 12px; }
           if (!p) return;
           const count = todayCount(p.id);
           const pr = progress({ count, goal: p.goal, step: p.step }, { useTime: true });
+
+          // ⚠ 标题和单位必须在这里跟着刷新。
+          // 原来只在初始化时赋了一次值，切换功课后数字变了、标题却还是上一门，
+          // 用户看到「观世音菩萨 / 349 / 目标 1000」这种自相矛盾的界面，
+          // 还会误以为计数记到了错误的功课上。
+          if (nameEl.textContent !== p.name) {
+            nameEl.textContent = p.name;
+            tapBtn.setAttribute('aria-label', `点击计数，《${p.name}》加 ${p.step || 1}`);
+          }
+          const unitText = `${p.unit || '遍'} / 日`;
+          if (unitEl.textContent !== unitText) unitEl.textContent = unitText;
+
           countEl.textContent = formatNumber(count);
           barEl.style.width = `${pr.pct}%`;
           remainEl.textContent = pr.reached ? '✓ 达成' : formatNumber(pr.remain);
