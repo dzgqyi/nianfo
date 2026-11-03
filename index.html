@@ -775,7 +775,7 @@ details.acc .acc-body { padding-bottom: 12px; }
   </div>
 
   <script>
-/* open-nianfo-counter — built 2026-11-02T12:35:01.510Z */
+/* open-nianfo-counter — built 2026-11-03T06:01:49.286Z */
 (function () {
   'use strict';
   var __defs = {};
@@ -894,7 +894,7 @@ details.acc .acc-body { padding-bottom: 12px; }
        * 发布新版本时这里和 package.json 要同步改（tests/version.test.js 会校验两者一致），
        * 界面上（标题栏、说明页）都会带上它，免得用户手里的 exe 究竟是哪个版本搞不清。
        */
-      const APP_VERSION = '0.3.18';
+      const APP_VERSION = '0.3.19';
 
       Object.assign(__m, { APP_VERSION });
 
@@ -5332,9 +5332,17 @@ details.acc .acc-body { padding-bottom: 12px; }
         const strip = h('div', { class: 'practice-switch' });
         const practices = getPractices();
         let expanded = false;
+        // 折叠条上每个功课对应的计数节点，供 syncStripCounts() 原地改文字。
+        // 为什么要记下来：paint() 每 500ms 跑一次，若每次都重建整个列表，
+        // 正在点的按钮会被替换掉（点按中断、展开动画闪烁）。只改文字最稳。
+        const countNodes = new Map();
+        // 折叠条上每个功课行，供刷新高亮用
+        const rowNodes = new Map();
 
         const paintStrip = () => {
           clear(strip);
+          countNodes.clear();
+          rowNodes.clear();
           // 折叠时这一行是「标题条」，用 CSS 做三栏居中；展开时是普通列表项，左对齐
           strip.className = `practice-switch${expanded ? '' : ' is-collapsed'}`;
           // ⚠ 每次重绘都重新取当前功课，不能用外层闭包里的 practice。
@@ -5346,6 +5354,7 @@ details.acc .acc-body { padding-bottom: 12px; }
             const active = p.id === activeId;
             // 折叠时只留当前这条
             if (!expanded && !active) continue;
+            const countSpan = h('span', { class: 'item-count' }, `${formatNumber(todayCount(p.id))} ${p.unit || '次'}`);
             const row = h('button', {
               class: `practice-item${active ? ' active' : ''}`,
               type: 'button',
@@ -5366,12 +5375,14 @@ details.acc .acc-body { padding-bottom: 12px; }
               h('span', { class: 'item-name' }, p.name),
               // 计数 + 箭头打包成一块「尾部」，折叠态整体贴右，名字才能真居中
               h('span', { class: 'item-trail' },
-                h('span', { class: 'item-count' }, `${formatNumber(todayCount(p.id))} ${p.unit || '次'}`),
+                countSpan,
                 active && practices.length > 1
                   ? h('span', { class: 'item-caret', 'aria-hidden': 'true' }, expanded ? '▴' : '▾')
                   : null,
               ),
             );
+            countNodes.set(p.id, countSpan);
+            rowNodes.set(p.id, row);
             strip.append(row);
           }
           if (expanded) {
@@ -5382,6 +5393,33 @@ details.acc .acc-body { padding-bottom: 12px; }
           }
         };
         paintStrip();
+
+        /* 只刷新折叠条上的「N 次」，不重建 DOM。
+         *
+         * 为什么需要：paint() 每 500ms 跑一次（蓝牙连续计数时也在跑），
+         * 但 paintStrip() 只在切页/点切换条时调用。结果就是大数字已经 +18，
+         * 折叠条上还停在上一帧的 +11，用户点一下列表它才「追上来」——
+         * 看着像两个计数不一致，这是真 bug，不是错觉。
+         *
+         * 只改文字不重建：重建会替换掉用户正按着的按钮（点按中断），
+         * 展开动画也会被打断重来。
+         */
+        const syncStripCounts = () => {
+          for (const p of practices) {
+            const node = countNodes.get(p.id);
+            if (!node) continue;
+            const text = `${formatNumber(todayCount(p.id))} ${p.unit || '次'}`;
+            if (node.textContent !== text) node.textContent = text;
+          }
+          // 高亮也要跟着走：从别处（设置页）切换功课后回到首页，靠这里纠正
+          const activeId = getActivePractice()?.id;
+          for (const [id, row] of rowNodes) {
+            const shouldBeActive = id === activeId;
+            if (row.classList.contains('active') !== shouldBeActive) {
+              row.classList.toggle('active', shouldBeActive);
+            }
+          }
+        };
 
         /* ---------------- 计数器卡片 ---------------- */
         // 初始内容取当前功课；切换后由 paint() 实时刷新，这里只是首帧的占位
@@ -5531,6 +5569,8 @@ details.acc .acc-body { padding-bottom: 12px; }
 
           const log = getLog(p.id);
           timeEl.textContent = clockFromMs((log?.seconds || 0) * 1000);
+          // ⚠ 折叠条上的计数也必须在这里同步，否则会和大数字对不上
+          syncStripCounts();
           paintDeviceBar();
         }
 
