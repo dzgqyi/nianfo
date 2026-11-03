@@ -775,7 +775,7 @@ details.acc .acc-body { padding-bottom: 12px; }
   </div>
 
   <script>
-/* open-nianfo-counter — built 2026-11-03T06:01:49.286Z */
+/* open-nianfo-counter — built 2026-11-03T14:57:57.469Z */
 (function () {
   'use strict';
   var __defs = {};
@@ -894,7 +894,7 @@ details.acc .acc-body { padding-bottom: 12px; }
        * 发布新版本时这里和 package.json 要同步改（tests/version.test.js 会校验两者一致），
        * 界面上（标题栏、说明页）都会带上它，免得用户手里的 exe 究竟是哪个版本搞不清。
        */
-      const APP_VERSION = '0.3.19';
+      const APP_VERSION = '0.4.0';
 
       Object.assign(__m, { APP_VERSION });
 
@@ -1830,6 +1830,106 @@ details.acc .acc-body { padding-bottom: 12px; }
         return out;
       }
 
+      /* ------------------------------------------------------------------ */
+      /* 设备标识                                                            */
+      /* ------------------------------------------------------------------ */
+
+      /**
+       * 本机设备 id（首次调用时生成，之后固定）。
+       *
+       * 为什么需要：日记录原来是「一台设备一个数」，同步时只能取较大值 ——
+       * 手机念 300、电脑念 100，合并后只剩 300，电脑那 100 次直接丢了。
+       * 要让两边的量加起来，就必须知道「每份计数是谁贡献的」。
+       *
+       * 用随机串而不是指纹/UA：换浏览器、隐私模式、清缓存都可能变，
+       * 具体值不重要，只要同一台设备在一次同步周期内不变就行。
+       */
+      const DEVICE_KEY = `${NS}.deviceId`;
+
+      function deviceId() {
+        let id = null;
+        try { id = localStorage.getItem(DEVICE_KEY); } catch { /* 忽略 */ }
+        if (!id) {
+          id = `d_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+          try { localStorage.setItem(DEVICE_KEY, id); } catch { /* 忽略 */ }
+        }
+        return id;
+      }
+
+      /**
+       * 把一条日记录拆成「按设备贡献的计数」。
+       *
+       * 老数据没有 dev 字段：把它整体记到一个固定的历史桶里。
+       * 这个桶不参与「本机新增」，只用来在合并时保留旧值，
+       * 否则第一次升级时老计数会被当成 0 清掉。
+       */
+      const LEGACY_DEV = '__legacy';
+
+      function logDevices(log) {
+        if (log && log.dev && typeof log.dev === 'object') return log.dev;
+        const n = Number(log?.count) || 0;
+        return n > 0 ? { [LEGACY_DEV]: n } : {};
+      }
+
+      /** 各设备贡献之和（即这条记录的真实总数） */
+      function sumDevices(dev) {
+        let sum = 0;
+        for (const v of Object.values(dev || {})) sum += Number(v) || 0;
+        return sum;
+      }
+
+      /**
+       * 合并两条同日记录的设备计数。
+       *
+       * 三种情况，按优先级：
+       *
+       * 1) **有一方做过人工修正（manualAt）**
+       *    修正的语义是「今天总共就该是这个数」。所以：
+       *      · 修正方的值作为地基（base）；
+       *      · 另一方在修正**之后**才产生的增量，要加回去（用户没想让后来的念白费）；
+       *      · 另一方在修正之前的旧值一律作废（那正是用户要改掉的）。
+       *    怎么判断「之后」：对方记录的 updatedAt 晚于 manualAt，且它有多出来的量。
+       *
+       * 2) **同一台设备**：取较大值。两份里必有一份是本端旧快照，取大不会丢。
+       *
+       * 3) **不同设备**：相加。各自按各自的键，互不覆盖。
+       */
+      function mergeDevices(a, b) {
+        const ma = Number(a?.manualAt) || 0;
+        const mb = Number(b?.manualAt) || 0;
+
+        if (ma || mb) {
+          const aWins = ma >= mb;
+          const win = aWins ? a : b;
+          const lose = aWins ? b : a;
+          const base = { ...logDevices(win) };
+          const winAt = ma || mb;
+
+          // 对方在修正之后仍产生过增量：把它比「修正前基线」多出来的部分补上
+          const loseDev = logDevices(lose);
+          const loseTotal = sumDevices(loseDev);
+          const loseUpdatedAt = Number(lose?.updatedAt) || 0;
+          if (loseTotal > 0 && loseUpdatedAt > winAt) {
+            // 对方这份里，有多少是「修正时就已经算过的」：用修正值做上限估计
+            // 修正之后的新增量 = 对方总量 - 修正时对方的量（未知，保守用 0）
+            // 也就是说：修正后的增量全部算新增，但同一个设备的键不能超过它自己的值
+            for (const [dev, v] of Object.entries(loseDev)) {
+              const n = Number(v) || 0;
+              if (n > (Number(base[dev]) || 0)) base[dev] = n;
+            }
+          } else {
+            // 对方的贡献全部发生在修正之前 → 作废，只保留修正方的值
+          }
+          return base;
+        }
+
+        const out = { ...logDevices(a) };
+        for (const [dev, v] of Object.entries(logDevices(b))) {
+          out[dev] = Math.max(Number(out[dev]) || 0, Number(v) || 0);
+        }
+        return out;
+      }
+
       /** 估算当前占用 */
       function usageBytes() {
         return listKeys().reduce((sum, k) => sum + k.length + (localStorage.getItem(k)?.length || 0), 0);
@@ -1837,6 +1937,8 @@ details.acc .acc-body { padding-bottom: 12px; }
 
       /** 不进备份的键：凭据类数据一旦进了备份文件，分享或上传时就会泄露 */
       const SECRET_KEYS = new Set(['sync.creds', 'sync.meta']);
+      /** 不进备份的键（非敏感）：设备 id 是本机的身份，端到端没有意义，也不能给别人 */
+      const LOCAL_ONLY_KEYS = new Set(['deviceId']);
 
       function exportAll() {
         const data = {};
@@ -1845,7 +1947,14 @@ details.acc .acc-body { padding-bottom: 12px; }
           const name = k.slice(NS.length + 1);
           // GitHub token 属于本机凭据，绝不写进备份文件
           if (SECRET_KEYS.has(name)) continue;
-          data[name] = JSON.parse(localStorage.getItem(k));
+          // 设备 id 是裸字符串，不是 JSON；传出去还会让两台设备"变成同一台"
+          if (LOCAL_ONLY_KEYS.has(name)) continue;
+          try {
+            data[name] = JSON.parse(localStorage.getItem(k));
+          } catch (err) {
+            // 单个键坏了不能让整份备份失败：跳过并告警，其余照常导出
+            console.warn(`[store] 导出时跳过无法解析的键 ${k}`, err);
+          }
         }
         return {
           app: 'open-nianfo-counter',
@@ -2074,8 +2183,13 @@ details.acc .acc-body { padding-bottom: 12px; }
        * 导入备份。merge=true 时对日记录/事件做合并（同一 id 以导入的为准）；
        * 功课除按 id 合并外，还会按名称合并——两端各自创建的同名功课视作同一门，
        * 计数记录自动归到本机那条功课下。merge=false 时整体覆盖。返回导入摘要。
+       *
+       * opts.keepActivePractice：保留本机「当前功课」，不被导入数据改写。
+       * 同步时必须传 true —— 否则云端备份里的 activePracticeId 会把用户
+       * 正在念的那一门换掉，但页面不会重绘，出现「顶条是A、卡片是B」的错位。
+       * 那只是「此刻在看哪门功课」，纯本地状态，没有同步的意义。
        */
-      function importAll(payload, { merge = true } = {}) {
+      function importAll(payload, { merge = true, keepActivePractice = false } = {}) {
         if (!payload || payload.app !== 'open-nianfo-counter' || typeof payload.data !== 'object') {
           throw new Error('不是本应用导出的备份文件');
         }
@@ -2086,13 +2200,19 @@ details.acc .acc-body { padding-bottom: 12px; }
 
         if (!merge) {
           // 整体覆盖时也要保住本机凭据：否则导入一份别人的备份，
-          // 会把自己刚配好的 GitHub token 一起清掉，用户还得重新填
+          // 会把自己刚配好的 GitHub token 一起清掉，用户还得重新填。
+          // 设备 id 同理保留 —— 它是「这台机器」的身份，导入别人的备份不该改它。
           const keep = new Map();
-          for (const name of SECRET_KEYS) {
+          for (const name of [...SECRET_KEYS, ...LOCAL_ONLY_KEYS]) {
             const v = localStorage.getItem(key(name));
             if (v != null) keep.set(name, v);
           }
-          for (const k of listKeys()) if (k !== SCHEMA_KEY) localStorage.removeItem(k);
+          for (const k of listKeys()) {
+            const name = k.slice(NS.length + 1);
+            // 设备 id 要留着，见上
+            if (k === SCHEMA_KEY || LOCAL_ONLY_KEYS.has(name)) continue;
+            localStorage.removeItem(k);
+          }
           for (const [name, v] of keep) localStorage.setItem(key(name), v);
         }
 
@@ -2113,6 +2233,12 @@ details.acc .acc-body { padding-bottom: 12px; }
         // 设置：覆盖（当前功课 id 若被同名合并，需改写映射后的 id）
         if (incoming.settings) {
           const s = { ...incoming.settings };
+          if (keepActivePractice) {
+            // 同步场景：本机正在念哪门功课，由本机说了算。
+            // 取本机旧值，而不是 incoming 的，避免后台同步把当前功课换掉。
+            const localS = read('settings', {});
+            if (localS && localS.activePracticeId) s.activePracticeId = localS.activePracticeId;
+          }
           if (s.activePracticeId && idRemap.size) s.activePracticeId = idRemap.get(s.activePracticeId) || s.activePracticeId;
           // 当前功课指向的那条若已不在列表里（比如是个被丢弃的空壳），
           // 改指向第一门真实功课；不改的话首页会显示「还没有功课」。
@@ -2127,7 +2253,15 @@ details.acc .acc-body { padding-bottom: 12px; }
           summary.settings = 1;
         }
 
-        // 日记录：按 practiceId + date 合并（数值取较大者，避免覆盖多设备累加值）
+        // 日记录：按 practiceId + date 合并。
+        //
+        // 这里曾经是 Math.max(cur.count, l.count)，也就是「谁多算谁」。
+        // 结果：手机念 300、电脑念 100（同一天同一门），同步后只剩 300，
+        // 电脑那 100 次凭空消失 —— 对计数类应用来说这是数据丢失，不是取舍。
+        //
+        // 现在按设备拆开：每份计数都记着「是哪台设备贡献的」。
+        // 同一设备取较大值（两份里必有一份是旧的），不同设备相加。
+        // 这样两端各念各的也能合到一起，重复同步也不会越加越多。
         if (Array.isArray(incoming.logs)) {
           const list = read('logs', []);
           const idx = new Map(list.map((l, i) => [`${l.practiceId}|${l.date}`, i]));
@@ -2136,15 +2270,23 @@ details.acc .acc-body { padding-bottom: 12px; }
             const k = `${pid}|${l.date}`;
             if (idx.has(k)) {
               const cur = list[idx.get(k)];
+              const dev = mergeDevices(cur, l);
+              // 秒数/轮数/总量没有「设备」维度，仍取较大值（它们是单调增的累计量，
+              // 取较大值不会丢本机刚念的那部分，只是两端会有一段重叠算不到）
               list[idx.get(k)] = {
                 ...cur,
-                count: Math.max(cur.count || 0, l.count || 0),
+                dev,
+                count: sumDevices(dev),
                 total: Math.max(cur.total || 0, l.total || 0),
                 seconds: Math.max(cur.seconds || 0, l.seconds || 0),
                 sessions: Math.max(cur.sessions || 0, l.sessions || 0),
+                updatedAt: Math.max(cur.updatedAt || 0, l.updatedAt || 0),
+                // 人工修正标记必须带过去，否则下一次合并又会被旧账推翻
+                manualAt: Math.max(Number(cur.manualAt) || 0, Number(l.manualAt) || 0) || undefined,
               };
             } else {
-              list.push({ ...l, practiceId: pid });
+              const dev = logDevices(l);
+              list.push({ ...l, practiceId: pid, dev, count: sumDevices(dev) });
             }
             summary.logs++;
           }
@@ -2172,6 +2314,21 @@ details.acc .acc-body { padding-bottom: 12px; }
         for (const k of listKeys()) localStorage.removeItem(k);
       }
 
+      /**
+       * 清空业务数据，但保留本机设备 id。
+       *
+       * 「清空数据」是用户想重来一遍，不是想变成另一台设备。
+       * 若把 deviceId 也清掉，之后重新计数会被当成新设备，
+       * 万一云端还留着旧记录，合并时旧值就会原样加回来，用户会以为清不掉。
+       */
+      function clearDataKeepDevice() {
+        for (const k of listKeys()) {
+          const name = k.slice(NS.length + 1);
+          if (LOCAL_ONLY_KEYS.has(name)) continue;
+          localStorage.removeItem(k);
+        }
+      }
+
       function structuredCloneSafe(v) {
         if (v === undefined) return undefined;
         try {
@@ -2181,7 +2338,7 @@ details.acc .acc-body { padding-bottom: 12px; }
         }
       }
 
-      Object.assign(__m, { SCHEMA_VERSION, read, write, remove, listKeys, usageBytes, exportAll, normalizePracticeName, mergePractices, importAll, clearAll });
+      Object.assign(__m, { SCHEMA_VERSION, read, write, remove, listKeys, deviceId, LEGACY_DEV, logDevices, sumDevices, mergeDevices, usageBytes, exportAll, normalizePracticeName, mergePractices, importAll, clearAll, clearDataKeepDevice });
 
     }).call(undefined);
   };
@@ -2415,7 +2572,7 @@ details.acc .acc-body { padding-bottom: 12px; }
        * 这里是整个应用唯一的「真相」。UI 层只调用这里暴露的函数，不直接碰 storage。
        * 每次变更后触发 bus 事件，UI 自行订阅重绘。
        */
-      const { read, write, normalizePracticeName } = __import("src/lib/store.js");
+      const { read, write, normalizePracticeName, deviceId, logDevices, sumDevices } = __import("src/lib/store.js");
       const { dayKey, nowMs } = __import("src/lib/time.js");
       const { emit } = __import("src/lib/bus.js");
       const { repairLogs, scanLogs } = __import("src/lib/repair.js");
@@ -2594,7 +2751,13 @@ details.acc .acc-body { padding-bottom: 12px; }
 
       function getActivePractice() {
         const { activePracticeId } = getSettings();
-        return getPractice(activePracticeId) || getPractices()[0] || null;
+        // ⚠ 必须排除已归档的功课。
+        // getPractice() 不过滤 archived（编辑/恢复归档功课时需要按 id 找到它），
+        // 但「当前功课」不能指向一门已归档的功课 —— 那会出现在首页上还能继续计数，
+        // 而设置页的功课列表里根本看不到它，用户无从下手。
+        const cur = getPractice(activePracticeId);
+        if (cur && !cur.archived) return cur;
+        return getPractices()[0] || null;
       }
 
       function findPracticeByNfc(tagId) {
@@ -2954,6 +3117,7 @@ details.acc .acc-body { padding-bottom: 12px; }
             practiceId,
             date,
             count: 0,
+            dev: {},      // 按设备拆分的贡献，跨端同步时相加；老数据见 store.logDevices
             total: 0,     // 包含用户手动修正前的累计
             seconds: 0,
             sessions: 0,
@@ -2961,6 +3125,23 @@ details.acc .acc-body { padding-bottom: 12px; }
           };
           s.logs.push(log);
         }
+        return log;
+      }
+
+      /**
+       * 让 log.count 与 log.dev 保持一致。
+       *
+       * count 是「界面直接读的数」，dev 是「跨设备合并的依据」。
+       * 两者必须同步，否则会出现「本机显示 300、同步上去只有 100」这种撕裂。
+       *
+       * 老数据（只有 count、没有 dev）在第一次写入时会被归一化成
+       * { __legacy: count }，之后本机的增量单独记在自己设备名下。
+       */
+      function reconcileLog(log) {
+        if (!log.dev || typeof log.dev !== 'object') {
+          log.dev = logDevices(log);
+        }
+        log.count = sumDevices(log.dev);
         return log;
       }
 
@@ -2973,8 +3154,15 @@ details.acc .acc-body { padding-bottom: 12px; }
         const p = getPractice(practiceId);
         if (!p) return null;
         const log = ensureLog(practiceId, dayKey());
+        reconcileLog(log);
         const before = log.count;
-        log.count = Math.max(0, before + delta);
+        // 增量只记到本机名下 —— 这是「多端各念各的，同步后相加」的关键。
+        // 绝不能直接写 count，否则本机的数会盖掉别端刚同步过来的贡献。
+        const me = deviceId();
+        const mine = Math.max(0, (Number(log.dev[me]) || 0) + delta);
+        log.dev[me] = mine;
+        log.count = sumDevices(log.dev);
+        if (log.count < before && delta > 0) log.count = before;  // 防御：绝不让正向增量把数字变小
         log.total = Math.max(0, (log.total || 0) + delta);
         log.updatedAt = nowMs();
         log.lastSource = source;
@@ -2983,15 +3171,29 @@ details.acc .acc-body { padding-bottom: 12px; }
         return { log, practice: p };
       }
 
-      /** 直接把今日计数设为某值（用于修正） */
+      /**
+       * 直接把今日计数设为某值（用于修正）。
+       *
+       * 「改数值」是人对着数字做的手工纠正，语义是「今天总共就是这个数」，
+       * 所以要把整条记录压平成本机一个数：其它设备的贡献清零、本机取目标值。
+       * 若只改 count 而留着旧的 dev，下次同步会把别端的旧值加回来，修正白做。
+       *
+       * manualAt 是「人工修正时间戳」，同步时用它压过更早的设备贡献：
+       * 只有比它更晚的贡献才算数。否则你在手机上改成 50，
+       * 电脑那份 100 的旧值一同步又加回来，修正等于没做。
+       */
       function setTodayCount(practiceId, value) {
         const s = ensureCache();
         const log = ensureLog(practiceId, dayKey());
+        reconcileLog(log);
         const before = log.count;
-        log.count = Math.max(0, Math.floor(value) || 0);
+        const target = Math.max(0, Math.floor(value) || 0);
+        log.dev = target > 0 ? { [deviceId()]: target } : {};
+        log.count = target;
         log.total = Math.max(0, (log.total || 0) + (log.count - before));
         log.updatedAt = nowMs();
         log.lastSource = 'manual';
+        log.manualAt = log.updatedAt;
         write('logs', s.logs);
         emit('count:changed', { practiceId, count: log.count, delta: log.count - before, source: 'manual', log });
         return log;
@@ -4641,9 +4843,13 @@ details.acc .acc-body { padding-bottom: 12px; }
        *
        * 规则与「导入备份」保持一致（同名功课按名称合并、日记录取较大值）。
        * 取较大值的语义是「谁按得多以谁为准」，避免一次误同步把数字翻倍。
+       *
+       * keepActivePractice: true —— 同步不能改「本机此刻在念哪门功课」。
+       * 这曾是「顶条显示A、计数卡片显示B」的元凶：后台同步把云端的
+       * activePracticeId 覆盖到本机，页面又不重绘，两处就分叉了。
        */
       async function applyRemoteToLocal(remoteData) {
-        return importAll(remoteData, { merge: true });
+        return importAll(remoteData, { merge: true, keepActivePractice: true });
       }
 
       /** 内容指纹：用于判断「本地自上次同步后有没有变」 */
@@ -5332,17 +5538,14 @@ details.acc .acc-body { padding-bottom: 12px; }
         const strip = h('div', { class: 'practice-switch' });
         const practices = getPractices();
         let expanded = false;
-        // 折叠条上每个功课对应的计数节点，供 syncStripCounts() 原地改文字。
+        // 折叠条上每个功课对应的计数节点，供 syncStrip() 原地改文字。
         // 为什么要记下来：paint() 每 500ms 跑一次，若每次都重建整个列表，
         // 正在点的按钮会被替换掉（点按中断、展开动画闪烁）。只改文字最稳。
         const countNodes = new Map();
-        // 折叠条上每个功课行，供刷新高亮用
-        const rowNodes = new Map();
 
         const paintStrip = () => {
           clear(strip);
           countNodes.clear();
-          rowNodes.clear();
           // 折叠时这一行是「标题条」，用 CSS 做三栏居中；展开时是普通列表项，左对齐
           strip.className = `practice-switch${expanded ? '' : ' is-collapsed'}`;
           // ⚠ 每次重绘都重新取当前功课，不能用外层闭包里的 practice。
@@ -5382,7 +5585,6 @@ details.acc .acc-body { padding-bottom: 12px; }
               ),
             );
             countNodes.set(p.id, countSpan);
-            rowNodes.set(p.id, row);
             strip.append(row);
           }
           if (expanded) {
@@ -5394,30 +5596,34 @@ details.acc .acc-body { padding-bottom: 12px; }
         };
         paintStrip();
 
-        /* 只刷新折叠条上的「N 次」，不重建 DOM。
+        /* 让折叠条跟着当前功课走。
          *
          * 为什么需要：paint() 每 500ms 跑一次（蓝牙连续计数时也在跑），
          * 但 paintStrip() 只在切页/点切换条时调用。结果就是大数字已经 +18，
          * 折叠条上还停在上一帧的 +11，用户点一下列表它才「追上来」——
          * 看着像两个计数不一致，这是真 bug，不是错觉。
          *
-         * 只改文字不重建：重建会替换掉用户正按着的按钮（点按中断），
-         * 展开动画也会被打断重来。
+         * 分两种情况：
+         *  1) 当前功课变了（NFC 标签、深链接、同步把当前功课改了）
+         *     → 必须重建，因为折叠态只渲染当前那一行，名字、单位都不同；
+         *  2) 当前功课没变 → 只改数字文字，不重建。
+         *     重建会替换掉用户正按着的按钮（点按中断），展开状态也会丢。
          */
-        const syncStripCounts = () => {
+        let stripShowsId = getActivePractice()?.id ?? null;
+        const syncStrip = () => {
+          const activeId = getActivePractice()?.id ?? null;
+          if (activeId !== stripShowsId) {
+            // 折叠态只渲染当前一行，换了功课就得整条重来
+            expanded = false;
+            paintStrip();
+            stripShowsId = activeId;
+            return;
+          }
           for (const p of practices) {
             const node = countNodes.get(p.id);
             if (!node) continue;
             const text = `${formatNumber(todayCount(p.id))} ${p.unit || '次'}`;
             if (node.textContent !== text) node.textContent = text;
-          }
-          // 高亮也要跟着走：从别处（设置页）切换功课后回到首页，靠这里纠正
-          const activeId = getActivePractice()?.id;
-          for (const [id, row] of rowNodes) {
-            const shouldBeActive = id === activeId;
-            if (row.classList.contains('active') !== shouldBeActive) {
-              row.classList.toggle('active', shouldBeActive);
-            }
           }
         };
 
@@ -5570,7 +5776,7 @@ details.acc .acc-body { padding-bottom: 12px; }
           const log = getLog(p.id);
           timeEl.textContent = clockFromMs((log?.seconds || 0) * 1000);
           // ⚠ 折叠条上的计数也必须在这里同步，否则会和大数字对不上
-          syncStripCounts();
+          syncStrip();
           paintDeviceBar();
         }
 
@@ -7098,7 +7304,16 @@ details.acc .acc-body { padding-bottom: 12px; }
         sim: simulator,
         go(tab) { location.hash = `#/${tab}`; },
         rerender() { mount(current, true); },
-        setPractice(id) { setActivePractice(id); location.hash = '#/home'; },
+        setPractice(id) {
+          setActivePractice(id);
+          // ⚠ 不能只写 location.hash = '#/home'。
+          // 已经在首页时 hash 本来就是这个值，浏览器不会触发 hashchange，
+          // 页面就完全不会重绘 —— 结果就是顶部折叠条显示的是新课，
+          // 下面计数卡片还停在旧功课（数字却是新课的），看着像两门功课串了。
+          // NFC 标签、深链接都走这条路，必须在这里兜住。
+          if (current === 'home') mount('home', true);
+          else location.hash = '#/home';
+        },
         onCleanup(fn) { cleanups.push(fn); },
         bleDelta: () => engine.state.bleTotal,
         backup: backupNow,
